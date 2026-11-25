@@ -165,7 +165,7 @@ body.mash .projbar{display:none}
 .trh{display:flex;height:30px;min-width:0;gap:8px;align-items:center;white-space:nowrap}
 .trh>*{flex:none}.trh .trsrc{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* new part, back and forward sit straight after the song's text; what is left of the row's width comes after them */
-.trh .trpick{margin-right:auto}
+.trh .trname{width:74px}.trh .trsrc{margin-right:auto}
 /* the die deals a new part: the loudest control in a track's header, and in the top bar */
 .die{display:block;transition:transform .15s ease-out}
 .trh .tbtn.trdie{min-width:26px;padding:1px 4px}

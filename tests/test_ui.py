@@ -3179,15 +3179,16 @@ def test_space_starts_and_stops_the_strip(site, page):
     page.keyboard.press("Space"); assert page.evaluate("CRATE.PB.playing") is True
 
 
-def test_the_die_sits_beside_the_song_and_stands_out(site, page):
+def test_the_die_sits_before_the_song_and_stands_out(site, page):
     _mixer(site, page)
     page.set_viewport_size({"width": 1440, "height": 900})
     for slot in ("drums", "bass", "vocals", "other"):
         row = f'[data-mxrow="{slot}"] .trh'
         src, die, back = _box(page, f"{row} .mxsrc"), _box(page, f"{row} [data-mxroll]"), _box(page, f'{row} [data-mxhist="{slot}:-1"]')
         bars = _box(page, f"{row} .trbars")
-        assert 0 <= die["l"] - src["r"] <= 14, (slot, src, die)             # straight after the song's text
-        assert die["r"] <= back["l"] and back["r"] < bars["l"], (slot, die, back, bars)
+        fwd = _box(page, f'{row} [data-mxhist="{slot}:1"]')
+        assert 0 <= src["l"] - fwd["r"] <= 14, (slot, src, fwd)             # straight before the song's text (a name can't move it)
+        assert die["r"] <= back["l"] and src["r"] <= bars["l"], (slot, die, back, bars)
         assert die["r"] - die["l"] > back["r"] - back["l"] and die["b"] - die["t"] <= 24, (slot, die, back)   # a little larger, not tall
         icon = _box(page, f"{row} [data-mxroll] svg")
         assert abs(icon["r"] - icon["l"] - 16) < 0.5 and abs(icon["b"] - icon["t"] - 16) < 0.5, (slot, icon)       # and upright
@@ -3466,3 +3467,17 @@ def test_playback_groups_the_drums_and_ducks_other_under_them(site, page):
     assert page.evaluate("CRATE.PB.voice('bass','a').chain.grouped") is False
     assert page.evaluate("CRATE.PB.voice('other','a').chain.gbanded") is True        # A's Other, under the drums
     assert page.evaluate("CRATE.PB.voice('bass','a').chain.ducked") is True          # and the bass's own duck is as it was
+
+
+def test_the_die_stays_put_when_the_part_changes(site, page):
+    """The die comes before the song's name, at the same place on every track, so a new part's longer or shorter
+    name can't move it (you can click it again and again without looking)."""
+    _mixer(site, page)
+    at = lambda: page.evaluate("JSON.stringify(Object.fromEntries([...document.querySelectorAll('[data-mxrow]')].map(r=>[r.dataset.mxrow,Math.round(r.querySelector('[data-mxroll]').getBoundingClientRect().left)])))")
+    before = json.loads(at())
+    assert len(set(before.values())) == 1, before                # one column of dice down the mixer
+    page.evaluate("(()=>{const p=CRATE.MX.slots.vocals;p.artist='An artist with a very long name indeed';p.title='and a title that goes on and on and on';CRATE.MX.slots.bass.artist='X';CRATE.MX.slots.bass.title='Y'})()")
+    cur = page.evaluate("CRATE.MX.slots.other.track")
+    _roll(page, "other", next(t for t in (901, 902, 903) if t != cur))
+    assert json.loads(at()) == before
+    assert page.evaluate("document.querySelector('[data-mxrow=\"vocals\"] .trsrc').getBoundingClientRect().left > document.querySelector('[data-mxrow=\"vocals\"] [data-mxroll]').getBoundingClientRect().right")

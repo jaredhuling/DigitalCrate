@@ -4035,7 +4035,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    const more=TR.more(id,ROLES,(MX.hist[id]||[]).length);
    const open=`<div class="trk${p?.mute?' muted':''}${TR.isOpen(id)?' open':''}" data-mxrow="${id}" style="--trcol:var(${color})">`;
    const find=findHTML(id);
-   if(!filled)return `${open}<div class="trh">${name}<div class="trsrc sub">empty</div><span class="trgroup trpick">${die}</span>${more}</div></div>${find}`;
+   if(!filled)return `${open}<div class="trh">${name}<span class="trgroup trpick">${die}</span><div class="trsrc sub">empty</div>${more}</div></div>${find}`;
 
    const n=p.n||1,k=p.k||1,on=new Set(p.steps||[]),fit=p.fit||[],i=I.slots?.[id];
    const shift=TR.semis(p.semis||0,p);
@@ -4058,7 +4058,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    const part=os?`<div class="mxwave mxsteps" data-mxwave="${id}" style="--n:${n*16};--b:${n}"><div class="mxsg">${Array.from({length:n*16},(_,j)=>`<button class="mxst${on.has(j)?' on':''}${j%16===0?' bar':j%4===0?' beat':''}" data-mxstep="${id}:${j}" title="bar ${Math.floor(j/16)+1}, beat ${Math.floor(j%16/4)+1}${j%4?' + '+(j%4)+'/16':''}"></button>`).join('')}</div>
     <canvas class="mxosw"></canvas><div class="mxsax">${Array.from({length:n},(_,j)=>`<span style="--f:${fit[j]!=null?Math.max(0,Math.min(1,(fit[j]-0.5)*2)).toFixed(2):0}" title="${fit[j]!=null?`fits this bar's harmony ${Math.round(fit[j]*100)}%`:''}">${j+1}</span>`).join('')}</div><i></i></div>`
     :`<div class="mxwave trwave" data-mxwave="${id}" tabindex="0" aria-label="${TR.name(R)} waveform"><canvas></canvas><i></i><span class="trtip" hidden></span>${TR.zoomButtons}</div>`;
-   return `${open}<div class="trh">${name}${src}<span class="trgroup trpick">${die}${audition}${history}</span><div class="trbars">${os?cycle:TR.barsText(p)}</div>
+   return `${open}<div class="trh">${name}<span class="trgroup trpick">${die}${audition}${history}</span>${src}<div class="trbars">${os?cycle:TR.barsText(p)}</div>
     <span class="trgroup">${TR.num(id,'st')}${TR.num(id,'ct')}</span><span class="trgroup">${mix}</span>${more}</div>
     ${part}${TR.fxHTML(id)}</div>${trimHTML(id)}${find}`;
   };
