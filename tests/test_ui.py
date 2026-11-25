@@ -2249,12 +2249,18 @@ def _old_state(site, page, track, snap_only=False):
       Object.assign(M.slots.drums,{db:-5,lock:true,eq:[1,0,2],dly:0.2,rev:0.3});await CRATE.mxSync()})()""")
     page.click("#sncap"); page.wait_for_function("CRATE.MX.snaps.length===1")
     page.fill("#mxname", "before tops"); page.click("#mxsave")
-    page.wait_for_function("CRATE.MX.savedSig&&CRATE.MX.savedSig===CRATE.mxSig()")
-    page.evaluate("""snapOnly=>{CRATE.mxPlay(false);const s=JSON.parse(localStorage.getItem('dcStems'));s.v=2;
+    page.wait_for_function("!CRATE.MX._saving&&CRATE.MX.savedSig&&CRATE.MX.savedSig===CRATE.mxSig()")
+    saved = page.evaluate("""snapOnly=>{CRATE.mxPlay(false);const s=JSON.parse(localStorage.getItem('dcStems'));s.v=2;
       [s,...s.snaps].forEach(x=>Object.values(x.slots).forEach(p=>{delete p.kit}));
       const mark=JSON.parse(CRATE.mxSig(2));mark.snaps=s.snaps;s.savedSig=JSON.stringify(mark);
       if(snapOnly)delete s.slots.drums;
-      localStorage.setItem('dcStems',JSON.stringify(s))}""", snap_only)
+      return s}""", snap_only)
+    # Install the legacy save in the new document, after the old mixer can no longer autosave over it.
+    encoded = json.dumps(json.dumps(saved))
+    page.add_init_script(f"""if (!sessionStorage.getItem('topsMigrationFixture')) {{
+        sessionStorage.setItem('topsMigrationFixture', '1');
+        localStorage.setItem('dcStems', {encoded});
+    }}""")
     page.reload()
     page.wait_for_function("typeof st!=='undefined'&&st.tab==='M'&&CRATE.MX&&CRATE.MX.songs", timeout=30000)
 
