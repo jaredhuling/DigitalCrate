@@ -133,7 +133,7 @@ input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:#2a2
 .pbx.pbmaster{border-style:solid;background:#11141a}
 /* Mashup uses the full width. Tracks have a header, a waveform and an effects row. */
 body.mash .projbar{display:none}
-.mxtop{gap:8px 9px}.mxtop .mxfit{margin-left:4px}.mxrate{display:inline-flex;gap:3px}.mxsaveg{display:inline-flex;gap:6px;align-items:center;margin-left:auto}.mxtop #mxclear{color:var(--mute)}
+.mxtop{gap:8px 9px}.mxtop .mxfit{margin-left:4px}.mxrate{display:inline-flex;gap:3px}.mxsaveg{display:inline-flex;gap:6px;align-items:center;margin-left:auto}.mxtop #mxclear{color:var(--mute);min-width:76px;text-align:center}.mxtop #mxclear.ask{color:#fff;background:#a8452f;border-color:#a8452f}
 .mxmaster,.mxmaster label{display:inline-flex;align-items:center;gap:4px}.mxmaster>span{min-width:7ch;font-variant-numeric:tabular-nums;color:var(--mute)}
 /* a one-shot slot's timeline: 16 steps a bar, hits lit; the axis under it numbers the cycle's bars, tinted by fit */
 .trk .mxsteps{display:grid;grid-template-rows:20px minmax(0,1fr) 13px;background:#0e1013;height:58px}

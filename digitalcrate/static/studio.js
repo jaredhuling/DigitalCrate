@@ -4077,7 +4077,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     <span class="mxsaveg"><input id="mxname" placeholder="name this combination" value="${esc(MX.name||'')}" style="width:150px"><button id="mxsave">💾 save</button>
     ${MX.saved&&MX.saved.length?`<select id="mxload"><option value="">open a saved one…</option>${MX.saved.map(m=>`<option ${m.name===MX.name?'selected':''}>${esc(m.name)}</option>`).join('')}</select>${MX.name&&MX.saved.some(m=>m.name===MX.name)?`<button id="mxrevert" title="back to “${esc(MX.name)}” as it was last saved: drops the changes made since">↺ revert</button><button id="mxdelsaved" title="delete the saved combination “${esc(MX.name)}”">🗑</button>`:''}`:''}</span>
     <span class="mxsaveg" style="margin-left:0"><select id="mxexbars" title="how long each section is in the Live set">${[4,8,16].map(b=>`<option value="${b}" ${(MX.exBars||8)===b?'selected':''}>${b} bars each</option>`).join('')}</select><button id="mxexport" title="a Live set of this mashup, dry (no EQ, delay or reverb): a track per slot, each part a looping clip at the tempo; with snapshots, they are laid end to end with a marker each">⇩ Ableton</button></span>
-    <button id="mxclear" title="a clean slate: empties every slot (locked ones too) and the snapshot strip. Saved combinations are not touched">${MX._clr&&Date.now()-MX._clr<4000?`clear all, and ${(MX.snaps||[]).length===1?'its snapshot':'its '+(MX.snaps||[]).length+' snapshots'}? click again`:'clear all'}</button></div>
+    <button id="mxclear" class="${MX._clr&&Date.now()-MX._clr<4000?'ask':''}" title="a clean slate: empties every slot (locked ones too) and the snapshot strip. Saved combinations are not touched">${MX._clr&&Date.now()-MX._clr<4000?'sure?':'clear all'}</button></div>
    ${MX.ask?`<div class="mxask">The ${MX.snaps.length===1?'snapshot':MX.snaps.length+' snapshots'} above came with “${esc(MX.snapsOf)}”. Save “${esc(MX.ask)}” <button id="mxdropsn">without them</button> <button id="mxkeepsn">with them</button> <button id="mxaskno">cancel</button></div>`:''}
    ${BLEND.stripHTML()}
    ${MX.order.map(row).join('')}
@@ -4114,7 +4114,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    save();markSave();await sync();return;
   }
   if(t.id==='mxclear'){const ns=(MX.snaps||[]).length;  // a clean slate: the snapshot strip goes too (it used to stay, and tag along into the next combination)
-   if(ns&&!(MX._clr&&Date.now()-MX._clr<4000)){MX._clr=Date.now();draw();setTimeout(()=>{if(MX._clr&&Date.now()-MX._clr>=3900){MX._clr=0;draw()}},4000);return}  // (kept on MX: a redraw between the two clicks mustn't forget the first)
+   if(ns&&!(MX._clr&&Date.now()-MX._clr<4000)){MX._clr=Date.now();draw();toast(`this also clears ${ns===1?'the snapshot':'the '+ns+' snapshots'}: click “sure?” to clear all`);setTimeout(()=>{if(MX._clr&&Date.now()-MX._clr>=3900){MX._clr=0;draw()}},4000);return}  // (kept on MX: a redraw between the two clicks mustn't forget the first)
    MX._clr=0;MX.order.forEach(retire);MX.slots={};MX.snaps=[];MX.trans=[];MX.snapSel=null;MX.snapsOf=null;MX.duck={};
    MX.info=null;MX.name='';MX.savedSig=null;save();draw();return}
   if(ds.mxalt){const id=ds.mxalt,p=MX.slots[id],key=[p.track,p.n,role(id),MX.bpm].join('|');

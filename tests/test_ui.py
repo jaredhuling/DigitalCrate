@@ -1507,8 +1507,11 @@ def test_snapshot_says_when_the_mixer_has_moved_on(site, page):
     page.click("#snundo")
     page.wait_for_function(f"!CRATE.MX.slots['{sid}']&&CRATE.MX.snapSel===null", timeout=30000)
     # clear all is a clean slate: the strip goes too (asked once more first), so it can't tag along into the next one
+    place = page.evaluate("JSON.stringify([...document.querySelectorAll('#mxclear,#mxexport')].map(b=>{const r=b.getBoundingClientRect();return [Math.round(r.left),Math.round(r.top),Math.round(r.width)]}))")
     page.click("#mxclear")
-    assert page.evaluate("CRATE.MX.snaps.length") == 1 and "click again" in page.inner_text("#mxclear")
+    # asking first: the button says so in place (nothing in the bar moves)
+    assert page.evaluate("CRATE.MX.snaps.length") == 1 and page.inner_text("#mxclear") == "sure?"
+    assert place == page.evaluate("JSON.stringify([...document.querySelectorAll('#mxclear,#mxexport')].map(b=>{const r=b.getBoundingClientRect();return [Math.round(r.left),Math.round(r.top),Math.round(r.width)]}))")
     page.click("#mxclear")
     assert page.evaluate("CRATE.MX.snaps.length") == 0 and page.evaluate("Object.keys(CRATE.MX.slots).length") == 0
     page.evaluate("CRATE.mxPlay(false)")
