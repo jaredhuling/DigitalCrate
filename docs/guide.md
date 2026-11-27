@@ -104,7 +104,9 @@ Hover over the song for the full name and why that part was picked.
   click elsewhere closes it). **Other takes** goes through other
   stretches of the same song. **Splice pieces…** builds the part from pieces of its song played one after the other: set each
   piece's bar and length (whole bars; ½ and 1½ are in the menu, and 12.5 as a bar means the middle of bar 12), add
-  one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), reorder with ◀, remove with ✕. A
+  one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), drag a block to reorder (or use ←), remove with ✕. A piece can play backwards (**rev**), take
+  twice or half as long (**2× long**, **½× long**, its pitch kept), or play several times over (**×2**, **×3**…: a loop
+  within the loop); **＋ rest** adds a bar of silence. A
   strip shows what plays, left to right, each piece in its own color; the song's waveform shows where each comes
   from in the same color, and the play line goes through them in turn. **Crossfade** blends every join (and where
   the loop comes round): each piece runs on a moment into its song, fading out under the next. Moving the loop, or **one stretch again**, drops the splice.
@@ -112,7 +114,7 @@ Hover over the song for the full name and why that part was picked.
   on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
   ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
-  **＋ add slot** adds another track, up to eight. **Clear all** empties the mixer.
+  **＋ add slot** adds another track, up to eight. Drag a track by its name to move it up or down. **Clear all** empties the mixer.
 - **Move the loop.** The waveform shows the whole stem, with the loop lit and the rest gray. Drag the right edge to
   change the length, the left edge to change the start while holding the end, or inside to move the loop. Click the
   gray to start the loop there. With the waveform focused, **← →** move it and **⇧← ⇧→** shorten or lengthen it.

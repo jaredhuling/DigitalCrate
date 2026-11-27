@@ -14,6 +14,7 @@ of its bars per bar), 0.5 when it's about half (one of its bars over two). state
 shift). There can be any number of slots, several of one stem; a slot without "stem" is the stem its id names.
 """
 import hashlib
+import re
 import json
 import tempfile
 import time
@@ -439,16 +440,49 @@ def tame(ref: np.ndarray) -> np.ndarray:
     return uniform_filter1d(minimum_filter1d(gain, w, mode="wrap"), w, mode="wrap").astype(np.float32)
 
 
+STRETCHES = (0.5, 1.0, 2.0)  # a piece at twice the speed, as it is, or at half the speed (twice as long)
+
+
 def clean_cut(cut, nb):
-    """A splice as [(first bar, bars), ...] of the song, in half bars, inside the song; () if there is none."""
+    """A splice as ((first bar, bars, backwards, stretch, repeats), ...); () if there is none. Bars are in half bars
+    and inside the song. A piece comes in as [first bar, bars, backwards?, stretch?, repeats?]:
+      first bar None: a rest (silence for that many bars);
+      stretch: 0.5, 1 or 2: it takes that many times its length to play (its pitch kept);
+      repeats: it plays that many times over before the next piece."""
     out = []
     for piece in cut or ():
-        b, ln = round(float(piece[0]) * 2) / 2, max(0.5, round(float(piece[1]) * 2) / 2)
-        b = max(0.0, min(b, nb - 0.5))
+        piece = list(piece) + [0, 1, 1][max(0, len(piece) - 2):]
+        ln = max(0.5, round(float(piece[1]) * 2) / 2)
+        st = min(STRETCHES, key=lambda v: abs(v - float(piece[3] or 1)))
+        reps = max(1, min(16, int(piece[4] or 1)))
+        if piece[0] is None:
+            out.append((None, min(ln, 16.0), False, 1.0, reps))
+            continue
+        b = max(0.0, min(round(float(piece[0]) * 2) / 2, nb - 0.5))
         ln = min(ln, nb - b)
         if ln >= 0.5:
-            out.append((b, ln))
+            out.append((b, ln, bool(piece[2]), st, reps))
     return tuple(out)
+
+
+def cut_key(cut):
+    """'2+1,10+0.5r,_+1,4+1s2x3': the pieces as text (r backwards, s stretch, x repeats, _ a rest)."""
+    return ",".join(("_" if b is None else f"{b:g}") + f"+{ln:g}" + ("r" if rv else "") + (f"s{st:g}" if st != 1 else "")
+                    + (f"x{reps}" if reps > 1 else "") for b, ln, rv, st, reps in cut)
+
+
+def parse_cut(text):
+    out = []
+    for piece in (text or "").split(","):
+        m = re.fullmatch(r"(_|[\d.]+)\+([\d.]+)(r?)(?:s([\d.]+))?(?:x(\d+))?", piece)
+        if m:
+            out.append([None if m[1] == "_" else float(m[1]), float(m[2]), bool(m[3]), float(m[4] or 1), int(m[5] or 1)])
+    return out or None
+
+
+def cut_bars(cut):
+    """How many of the song's bars a splice takes to play."""
+    return sum(ln * st * reps for _, ln, _, st, reps in cut)
 
 
 def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops=None, cond=0, cut=None, xf=0):
@@ -488,7 +522,7 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
         if cond:
             key += f"|c{cond}"
         if cut:
-            key += "|x" + ",".join(f"{b:g}+{ln:g}" for b, ln in cut) + (f"~{xf}" if xf else "")
+            key += "|x" + cut_key(cut) + (f"~{xf}" if xf else "")
         return CACHE / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.wav"
 
     old_geometry = legacy and ns != min(src_bars(n, k), nb)
@@ -511,40 +545,54 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
             return old
     CACHE.mkdir(parents=True, exist_ok=True)
     a, b = int(bt[bar0] * C.SR), int(bt[bar0 + ns] * C.SR)
-    N = int(round((sum(ln for _, ln in cut) / k if cut else n) * 240.0 / float(bpm) * C.SR))
+    N = int(round((cut_bars(cut) / k if cut else n) * 240.0 / float(bpm) * C.SR))
     at = lambda x: int(np.interp(x, np.arange(len(bt)), bt) * C.SR)  # a half bar: halfway between its bar lines
+    mean_bar = float(np.median(np.diff(bt))) * C.SR  # (a rest is this long a bar)
 
     def read(path):
         if not cut:
             return sf.read(str(path), start=a, frames=b - a, dtype="float32", always_2d=True)[0].T
-        lens = [at(b0 + ln) - at(b0) for b0, ln in cut]
-        total = sum(lens)
-        if not xf:
-            pieces = []
-            for (b0, ln), L in zip(cut, lens):
-                y = sf.read(str(path), start=at(b0), frames=L, dtype="float32", always_2d=True)[0].T
-                f = min(int(0.002 * C.SR), y.shape[1] // 2)  # 2 ms in and out of every piece: a join never clicks
+        X = min(int(xf / 1000 * C.SR), int(min(ln * st for _, ln, _, st, _ in cut) * mean_bar) // 2) if xf else 0
+        events = []  # (audio: its body and X more frames to fade out over, body frames), in play order
+        for b0, ln, rv, st, reps in cut:
+            if b0 is None:  # a rest
+                L = int(round(ln * mean_bar))
+                events += [(np.zeros((2, L + X), np.float32), L)] * reps
+                continue
+            L, more = at(b0 + ln) - at(b0), int(np.ceil(X / st))
+            if rv:  # backwards: it runs on into what came before it in the song
+                lead = min(more, at(b0))
+                y = sf.read(str(path), start=at(b0) - lead, frames=L + lead, dtype="float32", always_2d=True)[0].T[:, ::-1]
+            else:
+                y = sf.read(str(path), start=at(b0), frames=L + more, dtype="float32", always_2d=True)[0].T
+            y = np.ascontiguousarray(y)
+            if st != 1:  # twice as long, or half: its pitch kept
+                y = signalsmith(y, 0.0, st)
+                L = int(round(L * st))
+            y = np.pad(y[:, :L + X], ((0, 0), (0, max(0, L + X - y.shape[1]))))
+            events += [(y, L)] * reps
+        total = sum(L for _, L in events)
+        if not X:
+            out = []
+            for y, L in events:
+                y = y[:, :L].copy()
+                f = min(int(0.002 * C.SR), L // 2)  # 2 ms in and out of every piece: a join never clicks
                 if f:
                     ramp = np.linspace(0, 1, f, dtype=np.float32)
                     y[:, :f] *= ramp
                     y[:, -f:] *= ramp[::-1]
-                pieces.append(y)
-            return np.concatenate(pieces, axis=1)
+                out.append(y)
+            return np.concatenate(out, axis=1)
         # crossfaded: every piece fades in over X and runs X past its end (the song's own next moments) fading out,
         # under the piece that follows; the last one's tail lands on the start, where the loop comes round
-        X = max(1, min(int(xf / 1000 * C.SR), min(lens) // 2))
         t = np.linspace(0, np.pi / 2, X, dtype=np.float32)
         fin, fout = np.sin(t), np.cos(t)  # equal power
-        out = np.zeros((2, total), np.float32)
-        o = 0
-        for (b0, ln), L in zip(cut, lens):
-            y = sf.read(str(path), start=at(b0), frames=L + X, dtype="float32", always_2d=True)[0].T
-            if y.shape[1] < L + X:  # the song ends inside the tail
-                y = np.pad(y, ((0, 0), (0, L + X - y.shape[1])))
+        out, o = np.zeros((2, total), np.float32), 0
+        for y, L in events:
+            y = y.copy()
             y[:, :X] *= fin
             y[:, L:] *= fout
-            idx = (o + np.arange(L + X)) % total
-            np.add.at(out, (slice(None), idx), y[:2] if y.shape[0] >= 2 else np.repeat(y, 2, 0))
+            np.add.at(out, (slice(None), (o + np.arange(L + X)) % total), y)
             o += L
         return out
 
@@ -1082,7 +1130,7 @@ def shot_source(sample, key, bpm):
     if str(sample).startswith("stem:"):
         _, track, stem, bar0, n, k, semis, cond, legacy, *more = str(sample).split(":")
         pieces, _, xf = (more[0] if more else "").partition("~")
-        cut = [[float(v) for v in piece.split("+")] for piece in pieces.split(",")] if pieces else None
+        cut = parse_cut(pieces)
         return render(int(track), stem, int(bar0), int(n), float(bpm), float(semis), float(k), legacy=legacy == "1",
                       cond=int(cond or 0), cut=cut, xf=int(xf or 0))
     from .conform import render as conform
@@ -1224,7 +1272,7 @@ def export(name, bpm, key, sections, bars=8, reveal=True):
                                       + f" b{b0 + 1}-{b0 + src_bars(n, k)} {semis:+g}st{variant}.wav")
                 if not f.exists():
                     shutil.copy2(src, f)
-                beats = (sum(ln for _, ln in cut) / k if cut else n) * 4
+                beats = (cut_bars(cut) / k if cut else n) * 4
                 label = f"{m['artist']} — {m['title']} · " + (f"{len(cut)} pieces" if cut else f"bars {b0 + 1}–{b0 + src_bars(n, k)}")
             else:
                 continue

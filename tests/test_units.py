@@ -1172,7 +1172,12 @@ def test_a_part_can_be_spliced_from_pieces(tmp_path, monkeypatch):
     bar = int(2.4 * SR)
     y = np.concatenate([np.full(bar, 0.02 * (b + 1), np.float32) for b in range(24)])[:n]
     sf.write(str(f), np.stack([y, y]).T, SR, format="FLAC", subtype="PCM_16")
-    assert stems.clean_cut([[2.2, 1], [30, 2], [5, 0.2], [23.5, 4]], 24) == ((2.0, 1.0), (23.5, 0.5), (5.0, 0.5), (23.5, 0.5))
+    assert stems.clean_cut([[2.2, 1], [30, 2], [5, 0.2, 1], [23.5, 4], [None, 1], [3, 1, 0, 2, 3]], 24) == (
+        (2.0, 1.0, False, 1.0, 1), (23.5, 0.5, False, 1.0, 1), (5.0, 0.5, True, 1.0, 1), (23.5, 0.5, False, 1.0, 1),
+        (None, 1.0, False, 1.0, 1), (3.0, 1.0, False, 2.0, 3))
+    c = stems.clean_cut([[2, 1], [10, 0.5, 1], [None, 1], [4, 1, 0, 2, 3]], 24)
+    assert stems.cut_key(c) == "2+1,10+0.5r,_+1,4+1s2x3" and stems.clean_cut(stems.parse_cut(stems.cut_key(c)), 24) == c
+    assert stems.cut_bars(c) == 1 + 0.5 + 1 + 6
     out = stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 0.5], [5, 1.5]])
     a, sr = sf.read(str(out), dtype="float32", always_2d=True)
     assert len(a) == round(3 * 2.4 * SR)                                   # 3 bars in all
@@ -1192,5 +1197,20 @@ def test_a_part_can_be_spliced_from_pieces(tmp_path, monkeypatch):
     assert abs(x[j - 400]) < mid < abs(x[j + int(0.3 * SR)])
     assert abs(x[int(0.1 * SR)]) > 1.3 * abs(x[int(0.6 * SR)])              # bar 11 running on under the start of bar 3
     assert stems.shot_source("stem:1:vocals:2:2:1:0:0:0:2+1,10+1~200", None, 100) == xo
+    # a piece played backwards: bars 3-4 forwards get louder at their middle; backwards, quieter
+    fw = sf.read(str(stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 2], [10, 1]])), dtype="float32", always_2d=True)[0][:, 0]
+    bw_f = stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 2, 1], [10, 1]])
+    bw = sf.read(str(bw_f), dtype="float32", always_2d=True)[0][:, 0]
+    assert abs(fw[j + 2000]) > 1.2 * abs(fw[j - 2000]) and abs(bw[j - 2000]) > 1.2 * abs(bw[j + 2000])
+    assert abs(bw[2 * j + 2000] - fw[2 * j + 2000]) < 1e-4                 # the piece after it is as it was
+    assert stems.shot_source("stem:1:vocals:2:3:1:0:0:0:2+2r,10+1", None, 100) == bw_f
+    # a rest, a piece twice as long, a piece three times over: bar 3, a bar of nothing, bar 11 over two bars, bar 6 x3
+    mix = sf.read(str(stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [None, 1], [10, 1, 0, 2], [5, 1, 0, 1, 3]])),
+                  dtype="float32", always_2d=True)[0][:, 0]
+    assert len(mix) == 7 * j
+    m = lambda bar_: float(np.abs(mix[int((bar_ + 0.5) * j)]))
+    assert m(1) < 1e-4 and m(0) > 0.001                                     # the rest is silent
+    assert abs(m(2) / m(0) - 11 / 3) < 0.15 and abs(m(3) / m(0) - 11 / 3) < 0.15   # bar 11, for two bars
+    assert all(abs(m(b) / m(0) - 6 / 3) < 0.1 for b in (4, 5, 6))           # bar 6, three times
     # as a one-shot, and in the Live set, the same splice
     assert stems.shot_source("stem:1:vocals:2:3:1:0:0:0:2+1,10+0.5,5+1.5", None, 100) == out

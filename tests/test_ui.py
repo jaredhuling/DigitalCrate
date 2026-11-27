@@ -3641,6 +3641,11 @@ def test_a_part_is_spliced_from_pieces(site, page):
     page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)
     page.keyboard.down("Alt"); page.mouse.down(); page.mouse.up(); page.keyboard.up("Alt")
     page.wait_for_function(f"(p=>p.cut.length===3&&p.cut[2][1]===1&&Number.isInteger(p.cut[2][0])&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{2.5 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    # a piece played backwards
+    page.click('[data-mxpcrev="vocals:2"]')
+    page.wait_for_function("(p=>p.cut[2][2]===1&&p.buf&&!p._loading&&p._key.includes('r~60'))(CRATE.MX.slots.vocals)", timeout=120000)
+    assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/render'&&c[1].stem==='vocals'&&c[1].cut).pop()[1].cut[2][2]") == 1
+    assert "backwards" in page.inner_text(".mxpcstrip")
     # a piece earlier, a piece out
     third = page.evaluate("CRATE.MX.slots.vocals.cut[2][0]")
     page.click('[data-mxpcup="vocals:2"]')
@@ -3651,3 +3656,37 @@ def test_a_part_is_spliced_from_pieces(site, page):
     page.click('[data-mxpcoff="vocals"]')
     page.wait_for_function(f"(p=>!p.cut&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{2 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
     assert "piece" not in page.inner_text('[data-mxrow="vocals"] .trbars')
+
+
+def test_pieces_stretch_repeat_rest_and_are_dragged(site, page):
+    """A piece can take twice (or half) as long, play several times over, or be a rest; pieces are dragged into another
+    order, and so are the tracks."""
+    _mixer(site, page)
+    _calls(page)
+    bar = 240 / 100
+    ready = lambda cond: page.wait_for_function(f"(p=>{cond}&&p.buf&&!p._loading)(CRATE.MX.slots.vocals)", timeout=120000)
+    page.click('[data-mxrow="vocals"] [data-trmore]'); page.click('[data-mxrow="vocals"] .trmenu [data-mxsplice]')
+    b0 = page.evaluate("CRATE.MX.slots.vocals.bar0")
+    page.select_option('[data-mxpcl="vocals:0"]', "1"); ready("p.cut&&p.cut.length===1")
+    page.select_option('[data-mxpcs="vocals:0"]', "2")                                   # twice as long
+    ready(f"p.cut[0][3]===2&&Math.abs(p.buf.duration-{2 * bar})<0.03")
+    page.select_option('[data-mxpcn="vocals:0"]', "3")                                   # three times over
+    ready(f"p.cut[0][4]===3&&Math.abs(p.buf.duration-{6 * bar})<0.05")
+    page.click('[data-mxpcrest="vocals"]')                                               # then a bar of nothing
+    ready(f"p.cut.length===2&&p.cut[1][0]===null&&Math.abs(p.buf.duration-{7 * bar})<0.05")
+    assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/render'&&c[1].stem==='vocals'&&c[1].cut).pop()[1].cut") == [[b0, 1, 0, 2, 3], [None, 1]]
+    labels = page.evaluate("[...document.querySelectorAll('.mxpcstrip>span')].map(e=>e.innerText.trim())")
+    assert labels == [f"1 bar {b0 + 1} · 2× long ×3", "2 rest · 1 bar"]
+    assert "7 bars" in page.inner_text('[data-mxrow="vocals"] .trbars')
+    assert page.evaluate("CRATE.MX.slots.vocals.buf.getChannelData(0).slice(-20000,-2000).every(v=>Math.abs(v)<1e-4)")   # the rest is silent
+    # drag the rest in front of the piece
+    page.drag_and_drop('.mxpcstrip>span:nth-of-type(2)', '.mxpcstrip>span:nth-of-type(1)')
+    ready("p.cut[0][0]===null&&p.cut.length===2")
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots.vocals.cut") == [[None, 1], [b0, 1, 0, 2, 3]]
+    # tracks: drag one by its name onto another, and it takes that place
+    order = page.evaluate("CRATE.MX.order")
+    page.drag_and_drop('[data-mxrow="bass"] .trname', '[data-mxrow="drums"]', target_position={"x": 300, "y": 4})
+    new = page.evaluate("CRATE.MX.order")
+    assert new.index("bass") < new.index("drums") and sorted(new) == sorted(order)
+    assert page.evaluate("[...document.querySelectorAll('[data-mxrow]')].map(r=>r.dataset.mxrow)")[:len(new)] == new
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).order") == new
