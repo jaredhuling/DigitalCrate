@@ -3622,6 +3622,20 @@ def test_a_part_is_spliced_from_pieces(site, page):
     assert sent == [[p0["bar0"], 1], [11.5, 0.5]]
     assert "2 pieces" in page.inner_text('[data-mxrow="vocals"] .trbars') and "drift" in page.inner_text('[data-mxsplicebox="vocals"]')
     assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots.vocals.cut") == sent
+    # what plays, left to right: a block per piece, as wide as its share, named by its bar; the play line runs along it
+    blocks = page.evaluate("[...document.querySelectorAll('.mxpcstrip>span')].map(e=>[e.innerText.trim(),Math.round(parseFloat(e.style.width))])")
+    assert blocks == [[f"1 bar {p0['bar0'] + 1}", 67], ["2 bar 12.5 · ½ bar", 33]]
+    assert page.evaluate("(()=>{const c=document.querySelector('.mxpcstrip canvas');return c.width>100&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===0&&v>150)})()")
+    # in the song above, the play line goes through the pieces in turn: it is inside one of them, never between
+    inside = page.evaluate("""()=>{const p=CRATE.MX.slots.vocals,s=CRATE.TR.song(p.track,'vocals'),l=parseFloat(document.querySelector('[data-mxwave="vocals"] i').style.left)/100,
+      t=p._v[0]+l*(p._v[1]-p._v[0]),bt=x=>{const i=Math.floor(x);return s.bars[i]+(x-i)*(s.bars[i+1]-s.bars[i])};
+      return p.cut.some(c=>t>=bt(c[0])-0.05&&t<=bt(c[0]+c[1])+0.05)}""")
+    assert inside
+    # a crossfade at the joins: asked of the server, kept with the part; the length stays
+    page.evaluate("(()=>{const e=document.querySelector('[data-mxpcxf=\"vocals\"]');e.value=60;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()")
+    page.wait_for_function(f"(p=>p.xf===60&&p.buf&&!p._loading&&p._key.endsWith('~60')&&Math.abs(p.buf.duration-{1.5 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/render'&&c[1].stem==='vocals'&&c[1].cut).pop()[1].xf") == 60
+    assert page.get_attribute('[data-mxpcb="vocals:0"]', "step") == "0.5"          # the arrows step by half a bar
     # ⌥-click on the waveform: the bar under the pointer becomes the next piece
     box = page.locator('[data-mxwave="vocals"]').bounding_box()
     page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)

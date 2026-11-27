@@ -451,12 +451,14 @@ def clean_cut(cut, nb):
     return tuple(out)
 
 
-def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops=None, cond=0, cut=None):
+def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops=None, cond=0, cut=None, xf=0):
     """n mixer bars of a stem from the song's bar bar0 (n * k of its bars), as a WAV exactly n bars long at bpm,
     shifted by semis. Legacy saves retain the source span they played before track editing. -> path
 
     cut: a splice, [[first bar, bars], ...] of the song (half bars allowed): those pieces one after the other instead
-    of the one stretch from bar0; as long as they add up to at the tempo (their bars / k mixer bars)."""
+    of the one stretch from bar0; as long as they add up to at the tempo (their bars / k mixer bars).
+    xf: milliseconds of crossfade at every join of a splice (and where the loop comes round): each piece runs on for
+    that long into the song after its end, fading out under the next piece as it fades in. 0: a clean cut."""
     import soundfile as sf
     from .stretch import signalsmith
     track, requested = int(track), int(bar0)
@@ -475,6 +477,7 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
     ns = old_ns if legacy else min(src_bars(n, k), nb)
     bar0 = max(0, min(requested, nb - ns))
     cut = clean_cut(cut, nb)
+    xf = max(0, min(1000, int(round(float(xf or 0))))) if cut else 0
     if cut:
         legacy = False
 
@@ -485,7 +488,7 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
         if cond:
             key += f"|c{cond}"
         if cut:
-            key += "|x" + ",".join(f"{b:g}+{ln:g}" for b, ln in cut)
+            key += "|x" + ",".join(f"{b:g}+{ln:g}" for b, ln in cut) + (f"~{xf}" if xf else "")
         return CACHE / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.wav"
 
     old_geometry = legacy and ns != min(src_bars(n, k), nb)
@@ -514,16 +517,36 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
     def read(path):
         if not cut:
             return sf.read(str(path), start=a, frames=b - a, dtype="float32", always_2d=True)[0].T
-        pieces = []
-        for b0, ln in cut:
-            y = sf.read(str(path), start=at(b0), frames=at(b0 + ln) - at(b0), dtype="float32", always_2d=True)[0].T
-            f = min(int(0.002 * C.SR), y.shape[1] // 2)  # 2 ms in and out of every piece: a join never clicks
-            if f:
-                ramp = np.linspace(0, 1, f, dtype=np.float32)
-                y[:, :f] *= ramp
-                y[:, -f:] *= ramp[::-1]
-            pieces.append(y)
-        return np.concatenate(pieces, axis=1)
+        lens = [at(b0 + ln) - at(b0) for b0, ln in cut]
+        total = sum(lens)
+        if not xf:
+            pieces = []
+            for (b0, ln), L in zip(cut, lens):
+                y = sf.read(str(path), start=at(b0), frames=L, dtype="float32", always_2d=True)[0].T
+                f = min(int(0.002 * C.SR), y.shape[1] // 2)  # 2 ms in and out of every piece: a join never clicks
+                if f:
+                    ramp = np.linspace(0, 1, f, dtype=np.float32)
+                    y[:, :f] *= ramp
+                    y[:, -f:] *= ramp[::-1]
+                pieces.append(y)
+            return np.concatenate(pieces, axis=1)
+        # crossfaded: every piece fades in over X and runs X past its end (the song's own next moments) fading out,
+        # under the piece that follows; the last one's tail lands on the start, where the loop comes round
+        X = max(1, min(int(xf / 1000 * C.SR), min(lens) // 2))
+        t = np.linspace(0, np.pi / 2, X, dtype=np.float32)
+        fin, fout = np.sin(t), np.cos(t)  # equal power
+        out = np.zeros((2, total), np.float32)
+        o = 0
+        for (b0, ln), L in zip(cut, lens):
+            y = sf.read(str(path), start=at(b0), frames=L + X, dtype="float32", always_2d=True)[0].T
+            if y.shape[1] < L + X:  # the song ends inside the tail
+                y = np.pad(y, ((0, 0), (0, L + X - y.shape[1])))
+            y[:, :X] *= fin
+            y[:, L:] *= fout
+            idx = (o + np.arange(L + X)) % total
+            np.add.at(out, (slice(None), idx), y[:2] if y.shape[0] >= 2 else np.repeat(y, 2, 0))
+            o += L
+        return out
 
     def fit_length(y):
         ratio = N / max(1, y.shape[1])
@@ -1058,9 +1081,10 @@ def shot_source(sample, key, bpm):
     one it had when it was turned). -> path"""
     if str(sample).startswith("stem:"):
         _, track, stem, bar0, n, k, semis, cond, legacy, *more = str(sample).split(":")
-        cut = [[float(v) for v in piece.split("+")] for piece in more[0].split(",")] if more and more[0] else None
+        pieces, _, xf = (more[0] if more else "").partition("~")
+        cut = [[float(v) for v in piece.split("+")] for piece in pieces.split(",")] if pieces else None
         return render(int(track), stem, int(bar0), int(n), float(bpm), float(semis), float(k), legacy=legacy == "1",
-                      cond=int(cond or 0), cut=cut)
+                      cond=int(cond or 0), cut=cut, xf=int(xf or 0))
     from .conform import render as conform
     return conform(sample, key=key or None)[0]
 
@@ -1190,7 +1214,8 @@ def export(name, bpm, key, sections, bars=8, reveal=True):
                 legacy = bool(p.get("legacyLoop"))
                 cond = int(p.get("cond") or 0) if role == "bass" else 0
                 cut = clean_cut(p.get("cut"), len(m["bars"]) - 1)
-                src = render(p["track"], role, p["bar0"], n, bpm, semis, k, legacy=legacy, cond=cond, cut=cut)
+                src = render(p["track"], role, p["bar0"], n, bpm, semis, k, legacy=legacy, cond=cond, cut=cut,
+                             xf=p.get("xf") or 0)
                 b0 = int(p["bar0"])
                 variant = (" legacy" if legacy else "") + (f" even{cond}" if cond else "")
                 if role == "bass" or cut:

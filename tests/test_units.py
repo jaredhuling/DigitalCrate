@@ -1180,5 +1180,17 @@ def test_a_part_can_be_spliced_from_pieces(tmp_path, monkeypatch):
     one, two, three = lv(1.2), lv(2.4 + 0.6), lv(3.6 + 1.8)                # the middle of each piece
     assert abs(two / one - 11 / 3) < 0.05 and abs(three / one - 6 / 3) < 0.05   # bar 3, then bar 11, then bar 6
     assert out != stems.render(1, "vocals", 2, 4, 100, 0, 1) and out != stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 1]])
+    # crossfaded joins: the same length; across a join the level glides from one piece to the next (no step), and the
+    # last piece's tail lands on the start, where the loop comes round
+    xo = stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 1]], xf=200)
+    hard = sf.read(str(stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 1]])), dtype="float32", always_2d=True)[0][:, 0]
+    x = sf.read(str(xo), dtype="float32", always_2d=True)[0][:, 0]
+    j = int(2.4 * SR)
+    assert len(x) == len(hard) == 2 * j
+    assert abs(hard[j + 400]) > 2.5 * abs(hard[j - 400])                    # a clean cut: bar 3's level, then bar 11's at once
+    mid = abs(x[j + int(0.1 * SR)])                                         # halfway through the 200 ms: between the two
+    assert abs(x[j - 400]) < mid < abs(x[j + int(0.3 * SR)])
+    assert abs(x[int(0.1 * SR)]) > 1.3 * abs(x[int(0.6 * SR)])              # bar 11 running on under the start of bar 3
+    assert stems.shot_source("stem:1:vocals:2:2:1:0:0:0:2+1,10+1~200", None, 100) == xo
     # as a one-shot, and in the Live set, the same splice
     assert stems.shot_source("stem:1:vocals:2:3:1:0:0:0:2+1,10+0.5,5+1.5", None, 100) == out

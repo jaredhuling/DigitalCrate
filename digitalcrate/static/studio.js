@@ -2232,7 +2232,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   BL.sameAudio = (a, b) => BL.audible(a) && BL.audible(b) && a.stem === b.stem && a.track === b.track &&
     a.bar0 === b.bar0 && a.n === b.n && (a.k || 1) === (b.k || 1) && !!a.legacyLoop === !!b.legacyLoop &&
     (a.cond || 0) === (b.cond || 0) && TRACKS.semis(a.off || 0, a) === TRACKS.semis(b.off || 0, b) &&
-    JSON.stringify(a.cut || null) === JSON.stringify(b.cut || null);
+    JSON.stringify(a.cut || null) === JSON.stringify(b.cut || null) && (a.xf || 0) === (b.xf || 0);
 
   // one row per slot of two snapshots: [{id, stem, a, b, kind}], kind one of same, change, enter, exit, empty
   BL.diffSnaps = (A, B) => {
@@ -2262,7 +2262,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
         p.eq || [0, 0, 0], p.dly || 0, p.dt || '1/8', p.fb ?? 0.35, p.eqOn !== false, p.dlyOn !== false,
         p.rev || 0, p.revOn !== false, BL.harmAmt(p), !!p.legacyLoop, ...(p.cond ? [p.cond] : []), ...(p.hk === 'oct' ? ['oct'] : []),
         ...(p.back || (p.gate && Object.keys(p.gate).length) ? ['shot', !!p.back, p.gate || {}] : []),
-        ...(p.cut && p.cut.length ? ['cut', p.cut] : [])] : null];
+        ...(p.cut && p.cut.length ? ['cut', p.cut, p.xf || 0] : [])] : null];
   }), BL.duckSig(s)]);
   // Include the default setting for tracks that have never had their Duck control touched.
   BL.duckSig = (s, roles = Object.keys(BL.DUCKED), drums = true) => (s.order || []).flatMap(id => {
@@ -2411,7 +2411,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   const bufferOf = (key, p, semis) => {
     if (!PB.cache.has(key)) {
       const pr = (async () => {
-        const r = await window.CRATE.api('api/stems/render', { track: p.track, stem: p.stem, bar0: p.bar0, n: p.n, k: p.k || 1, bpm: H.MX.bpm, semis: TRACKS.semis(semis, p), legacy: !!p.legacyLoop, cond: p.cond, cut: p.cut && p.cut.length ? p.cut : undefined });
+        const r = await window.CRATE.api('api/stems/render', { track: p.track, stem: p.stem, bar0: p.bar0, n: p.n, k: p.k || 1, bpm: H.MX.bpm, semis: TRACKS.semis(semis, p), legacy: !!p.legacyLoop, cond: p.cond, cut: p.cut && p.cut.length ? p.cut : undefined, xf: p.xf || undefined });
         const ab = await (await fetch(url(r.url))).arrayBuffer();
         return await AC.decodeAudioData(ab);
       })();
@@ -3303,6 +3303,14 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   TR.song = (track, stem) => pictures.get(pictureKey(track, stem))?.song || null;
   const slotSong = id => TR.song(H.part(id)?.track, H.role(id));
   TR.has = id => !!slotSong(id);
+  TR.PIECE = ['#e0a458', '#7cc4e8', '#c79be0', '#9fd08a', '#ee8f7f', '#d8d06a'];   // a splice's pieces, in play order
+  const barT = (bars, x) => { const i = clamp(Math.floor(x), 0, bars.length - 2); return bars[i] + (x - i) * (bars[i + 1] - bars[i]); };
+  const cutTimes = (bars, cut) => (cut || []).map(c => [barT(bars, c[0]), barT(bars, Math.min(c[0] + c[1], bars.length - 1))]);
+  // the stretch of the song a part takes up: its loop, or from its first piece to its last
+  const spanTimes = (bars, p) => {
+    const t = cutTimes(bars, p.cut);
+    return t.length ? [Math.min(...t.map(q => q[0])), Math.max(...t.map(q => q[1]))] : loopTimes(bars, p);
+  };
   const loopTimes = (bars, p) => {
     const from = clamp(p.bar0, 0, bars.length - 2);
     const to = Math.min(bars.length - 1, from + TR.srcBars(p.n, p.k));
@@ -3322,9 +3330,9 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     canvas.parentElement.classList.toggle('busy', !!busy);
     const xAt = t => (t - v0) * w / (v1 - v0);
     // a splice: its pieces lit (each numbered in the order it plays), not one loop
-    const barTime = x => { const i = clamp(Math.floor(x), 0, bars.length - 2); return bars[i] + (x - i) * (bars[i + 1] - bars[i]); };
-    const pieces = (o.cut || []).map(c => [xAt(barTime(c[0])), xAt(barTime(Math.min(c[0] + c[1], bars.length - 1)))]);
-    const lit = x => pieces.length ? pieces.some(q => x >= q[0] && x < q[1]) : x >= xa && x < xb;
+    const pieces = cutTimes(bars, o.cut).map(q => [xAt(q[0]), xAt(q[1])]);
+    const tint = x => { for (let i = pieces.length - 1; i >= 0; i--) if (x >= pieces[i][0] && x < pieces[i][1]) return TR.PIECE[i % TR.PIECE.length]; return null; };
+    const lit = x => pieces.length ? tint(x) : x >= xa && x < xb ? col : null;
     const [a, b] = loopTimes(bars, o), xa = pieces.length ? -9 : xAt(a), xb = pieces.length ? -9 : xAt(b);
     canvas.parentElement.style.setProperty('--loop-left', xa + 'px');
     canvas.parentElement.style.setProperty('--loop-right', (xb - 2) + 'px');
@@ -3349,17 +3357,19 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
       let peak = 0;
       for (let i = lo; i < hi; i++) peak = Math.max(peak, pk[i]);
       const height = Math.max(1, peak / 255 * (h - 6));
-      g.fillStyle = lit(x) ? col : '#39404b';
+      g.fillStyle = lit(x) || '#39404b';
       g.fillRect(x, (h - height) / 2, 1 / dpr, height);
     }
-    pieces.forEach((q, i) => {
+    pieces.forEach((q, i) => {   // each piece in its color, with its number in a tab above it (also when it is a sliver)
+      const c = TR.PIECE[i % TR.PIECE.length], wd = Math.max(2, q[1] - q[0]);
       g.fillStyle = 'rgba(255,255,255,.06)';
-      g.fillRect(q[0], 0, q[1] - q[0], h);
-      g.fillStyle = col;
-      g.fillRect(q[0], 0, q[1] - q[0], 3);
+      g.fillRect(q[0], 0, wd, h);
+      g.fillStyle = c;
+      g.fillRect(q[0], 0, wd, 3);
       g.fillRect(q[0], 0, 1.5, h);
-      g.fillRect(q[1] - 1.5, 0, 1.5, h);
-      if (q[1] - q[0] >= 12) { g.fillStyle = '#fff'; g.font = 'bold 10px ui-monospace, Menlo, monospace'; g.fillText(String(i + 1), q[0] + 4, 14); }
+      g.fillRect(q[0] + wd - 1.5, 0, 1.5, h);
+      g.fillRect(q[0], 0, 13, 13);
+      g.fillStyle = '#111'; g.font = 'bold 10px ui-monospace, Menlo, monospace'; g.fillText(String(i + 1), q[0] + 3.5, 10);
     });
     g.fillStyle = col;
     g.fillRect(xa, 0, xb - xa, 3);
@@ -3412,7 +3422,16 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     const song = slotSong(id), p = H.part(id);
     if (!song || !p._v) return phase;
     const playing = p._playingLoop?.track === p.track ? p._playingLoop : p;
-    const [a, b] = loopTimes(song.bars, playing), [v0, v1] = p._v;
+    const [v0, v1] = p._v, pieces = cutTimes(song.bars, playing.cut);
+    if (pieces.length) {   // a splice: through each piece in turn, jumping from one to the next
+      const total = pieces.reduce((t, q) => t + q[1] - q[0], 0);
+      let at = phase * total;
+      for (const [a, b] of pieces) {
+        if (at <= b - a) return (a + at - v0) / (v1 - v0);
+        at -= b - a;
+      }
+    }
+    const [a, b] = loopTimes(song.bars, playing);
     return (a + phase * (b - a) - v0) / (v1 - v0);
   };
 
@@ -3551,7 +3570,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     const p = H.part(id), key = pictureKey(p.track, H.role(id));
     if (p._viewKey === key && !p._preset) return;
     const preset = p._preset || (!p._v ? viewPreset() : null);
-    const [a, b] = loopTimes(song.bars, p);
+    const [a, b] = spanTimes(song.bars, p);
     if (preset === 'loop') {
       p._v = TR.loopView(a, b, firstBar(song), song.dur);
       p._viewMode = 'loop';
@@ -3652,7 +3671,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(UN.cur===null){UN.cur=k;return}if(k===UN.cur)return;const now=performance.now();
   if(now-UN.t>600||!UN.u.length){UN.u.push(UN.cur);if(UN.u.length>100)UN.u.shift()}UN.t=now;UN.cur=k;UN.r=[]}
  const save=()=>{try{const J=JSON.stringify({v:5,bpm:MX.bpm,key:MX.key,name:MX.name||'',savedSig:MX.savedSig||null,snapsOf:MX.snapsOf||null,fx:MX.fx!==false,reverb:MX.reverb,master:{on:MX.mast.on},glue:{on:MX.glue.on},duck:MX.duck||{},snaps:MX.snaps||[],trans:MX.trans||[],order:MX.order,roles:MX.roles,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>{const p=MX.slots[s];
-   return [s,{stem:role(s),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,off:p.off||0,ct:p.ct||0,bars:p.bars,why:p.why,artist:p.artist,title:p.title,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,semis:p.semis,steps:p.steps,every:p.every,trim:p.trim||null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,db:p.db||0,mute:!!p.mute,lock:!!p.lock,eq:p.eq||[0,0,0],dly:p.dly||0,dt:p.dt||'1/8',fb:p.fb??0.35,eqOn:p.eqOn!==false,dlyOn:p.dlyOn!==false,rev:p.rev||0,revOn:p.revOn!==false,harm:p.harm==null?null:BLEND.harmAmt(p),hup:p.hup||undefined,legacyLoop:p.legacyLoop||undefined,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined}]}))});localStorage.setItem('dcStems',J);undoNote(J)}catch(e){}};
+   return [s,{stem:role(s),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,bars:p.bars,why:p.why,artist:p.artist,title:p.title,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,semis:p.semis,steps:p.steps,every:p.every,trim:p.trim||null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,db:p.db||0,mute:!!p.mute,lock:!!p.lock,eq:p.eq||[0,0,0],dly:p.dly||0,dt:p.dt||'1/8',fb:p.fb??0.35,eqOn:p.eqOn!==false,dlyOn:p.dlyOn!==false,rev:p.rev||0,revOn:p.revOn!==false,harm:p.harm==null?null:BLEND.harmAmt(p),hup:p.hup||undefined,legacyLoop:p.legacyLoop||undefined,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined}]}))});localStorage.setItem('dcStems',J);undoNote(J)}catch(e){}};
  const sig=(v=5,legacyShape=false)=>JSON.stringify({bpm:MX.bpm,key:MX.key||'',fx:MX.fx!==false,reverb:[MX.reverb.type,MX.reverb.decay],duck:BLEND.duckSig(MX,v<4?['bass']:undefined,v>=5),...(MX.mast.on?{}:{master:{on:false}}),...(MX.glue.on?{}:{glue:{on:false}}),
   snaps:MX.snaps||[],trans:MX.trans||[],slots:MX.order.map(id=>{
    const p=MX.slots[id];
@@ -3667,7 +3686,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     if(p.cond)part.push(p.cond);
     if(p.hk==='oct')part.push('oct');
     if(p.back||(p.gate&&Object.keys(p.gate).length))part.push('shot',!!p.back,p.gate||{});
-    if(p.cut&&p.cut.length)part.push('cut',p.cut);
+    if(p.cut&&p.cut.length)part.push('cut',p.cut,p.xf||0);
    }
    return [role(id),part];
   })});
@@ -3832,7 +3851,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  function play(on){MX.on=on;clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
   if(on){AC.resume();MX.t0=AC.currentTime+0.05;MX.order.forEach(id=>{if(MX.slots[id])MX.slots[id]._next=null});MX.order.forEach(startSrc);osT=setInterval(osTick,50);osTick()}else MX.order.forEach(s=>stopSrc(s));draw()}  // (draw starts the play lines)
  // Ask for the current parts in parallel. Only the latest sync may swap audio into a slot.
- const cutKey=p=>p&&p.cut&&p.cut.length?p.cut.map(c=>c[0]+'+'+c[1]).join(','):'';
+ const cutKey=p=>p&&p.cut&&p.cut.length?p.cut.map(c=>c[0]+'+'+c[1]).join(',')+(p.xf?'~'+p.xf:''):'';
  const renderKey=(p,bpm,semis)=>[p.track,p.bar0,p.n,p.k||1,bpm,semis,!!p.legacyLoop,p.cond||0,cutKey(p)].join('|');
  let syncing=null,syncId=0;
  async function decode(path){
@@ -3930,7 +3949,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    const semis=TR.semis(p.semis,p);
    want=renderKey(p,bpm,semis);
    load=async()=>{
-    const r=await api('api/stems/render',{track,stem:kind,bar0,n,k,bpm,semis,legacy,cond,cut:p.cut&&p.cut.length?p.cut:undefined});
+    const r=await api('api/stems/render',{track,stem:kind,bar0,n,k,bpm,semis,legacy,cond,cut:p.cut&&p.cut.length?p.cut:undefined,xf:p.xf||undefined});
     const buf=await decode(url(r.url));
     return {buf,sub:r.sub||0,whole:r.whole};
    };
@@ -3962,7 +3981,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     const legacy=p.hup?await BLEND.harmMeasure(buf,'drive'):null;
     await acceptAudio(()=>({buf}),()=>BLEND.harmKind(p),owns,hc=>{
      p.buf=buf;p._key=want;p._hc=hc;p._legacyHc=legacy;
-     p._playingLoop={track:p.track,bar0:p.bar0,n:p.n,k:p.k};
+     p._playingLoop={track:p.track,bar0:p.bar0,n:p.n,k:p.k,cut:p.cut||null};
      p.sub=sub;initHarm(id);startSrc(id);
     });
    }
@@ -3998,7 +4017,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  async function setLoop(id,bar0,n){
   const p=MX.slots[id];
   if(!(MX.hist[id]||[]).length)hpush(id);
-  Object.assign(p,{bar0,n,cut:null,alt:null,legacyLoop:false,_loading:true});
+  Object.assign(p,{bar0,n,cut:null,xf:0,alt:null,legacyLoop:false,_loading:true});
   hpush(id);
   save();
   markSave();
@@ -4012,7 +4031,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  function ev(kind,stem){api('api/stems/event',{kind,stem:stem||null,state:state()}).then(r=>{MX.rated=r.rated;const el=$('mxrated');if(el)el.textContent=ratedTxt()}).catch(()=>{})}
  const ratedTxt=()=>MX.rated>=12?`recommendations learned from ${MX.rated} ratings`:`learning: ${MX.rated}/12 ratings before it adapts (👍 👎, what you keep and what you throw out)`;
  // each slot remembers the parts it has held: ↶ goes back to one you liked after trying something else, ↷ forward again
- const snap=(id,p)=>({stem:role(id),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,off:p.off||0,ct:p.ct||0,legacyLoop:!!p.legacyLoop,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined,artist:p.artist,title:p.title,bars:p.bars,why:p.why,alt:p.alt||null,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,steps:(p.steps||[]).slice(),every:p.every,trim:p.trim?p.trim.slice():null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit});
+ const snap=(id,p)=>({stem:role(id),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,legacyLoop:!!p.legacyLoop,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined,artist:p.artist,title:p.title,bars:p.bars,why:p.why,alt:p.alt||null,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,steps:(p.steps||[]).slice(),every:p.every,trim:p.trim?p.trim.slice():null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit});
  MX.hist={};MX.hpos={};
  const sameHistoryPart=(a,b)=>a&&a.stem===b.stem&&a.track===b.track&&a.sample===b.sample&&
   a.bar0===b.bar0&&a.n===b.n&&a.k===b.k&&a.legacyLoop===b.legacyLoop;
@@ -4079,17 +4098,30 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   cut=cut.map(([b,l])=>{b=Math.max(0,Math.min(nb-0.5,Math.round(b*2)/2));l=Math.max(0.5,Math.min(nb-b,Math.round(l*2)/2));return [b,l]});
   if(!cut.length)return;if(!(MX.hist[id]||[]).length)hpush(id);
   Object.assign(p,{cut,bar0:Math.floor(cut[0][0]),n:Math.max(1,Math.round(cutTotal(cut)/(p.k||1))),alt:null,legacyLoop:false,_loading:true});
+  if(p._viewMode!=='song'&&p._viewMode!=='custom')p._preset='loop';  // the Loops view frames all the pieces
   hpush(id);save();markSave();draw();await sync()}
  function spliceHTML(id){const p=MX.slots[id];if(MX.splice!==id||!p||p.track==null||isOS(id))return'';
   const cut=cutOf(p),total=cutTotal(cut)/(p.k||1),lens=[0.5,1,1.5,2,3,4,6,8];
-  return `<div class="mxtrimbox mxsplice" data-mxsplicebox="${id}"><div class="mxtrimbar" style="margin-top:0"><b>Pieces</b>
-   ${cut.map(([b,l],i)=>`<span class="mxpc"><i>${i+1}</i><span class="mxlab">bar</span><input type="number" min="1" max="${p.bars||9999}" step="1" value="${b+1}" data-mxpcb="${id}:${i}" title="the song's bar this piece starts at · type 12.5 for the middle of bar 12">
+  const bl=(b,l)=>l===1?`bar ${b+1}`:Number.isInteger(l)&&Number.isInteger(b)?`bars ${b+1}–${b+l}`:`bar ${b+1} · ${l===0.5?'½ bar':l+' bars'}`;
+  return `<div class="mxtrimbox mxsplice" data-mxsplicebox="${id}">
+   <div class="mxlab" style="margin-bottom:4px">what plays, left to right (the song above shows where each piece comes from, in the same color)</div>
+   <div class="mxpcstrip" data-mxpcstrip="${id}"><canvas></canvas><i></i>${(()=>{let at=0;const T=cutTotal(cut);return cut.map(([b,l],i)=>{const x=at/T*100;at+=l;return `<span style="left:${x.toFixed(2)}%;width:${(l/T*100).toFixed(2)}%;--pc:${TR.PIECE[i%TR.PIECE.length]}"><b>${i+1}</b> ${bl(b,l)}</span>`}).join('')})()}</div>
+   <div class="mxtrimbar"><b>Pieces</b>
+   ${cut.map(([b,l],i)=>`<span class="mxpc" style="--pc:${TR.PIECE[i%TR.PIECE.length]}"><i>${i+1}</i><span class="mxlab">bar</span><input type="number" min="1" max="${p.bars||9999}" step="0.5" value="${b+1}" data-mxpcb="${id}:${i}" title="the song's bar this piece starts at · 12.5 is the middle of bar 12 (the arrows step by half a bar)">
     <select data-mxpcl="${id}:${i}" title="how long this piece is">${[...new Set([...lens,l])].sort((x,y)=>x-y).map(v=>`<option value="${v}" ${v===l?'selected':''}>${v===0.5?'½ bar':v+(v===1?' bar':' bars')}</option>`).join('')}</select>
     <button class="tbtn" data-mxpcup="${id}:${i}" title="play this piece earlier" ${i?'':'disabled'}>◀</button><button class="tbtn" data-mxpcx="${id}:${i}" title="take this piece out" ${cut.length>1?'':'disabled'}>✕</button></span>`).join('')}
    <button class="tbtn" data-mxpcadd="${id}" title="another piece: the bar after the last one (then set its bar, or ⌥-click the waveform)">＋ piece</button>
+   <span class="mxlab" style="margin-left:10px" title="crossfade at every join, and where the loop comes round: each piece runs on a moment into its song, fading out under the next one as it fades in. 0 is a clean cut">crossfade</span><input type="range" min="0" max="400" step="5" value="${p.xf||0}" data-mxpcxf="${id}" style="width:110px" title="crossfade at every join, and where the loop comes round. 0 is a clean cut"><output>${p.xf||0} ms</output>
    <span style="flex:1"></span><span class="sub">${Number(total.toFixed(2))} bar${total===1?'':'s'} in all${total%1?' · not a whole number of bars: it will drift against the other tracks':''}</span>
    ${p.cut&&p.cut.length?`<button class="tbtn" data-mxpcoff="${id}" title="back to one stretch of the song, from the first piece">one stretch again</button>`:''}<button class="tbtn" data-mxsplice="${id}">done</button></div>
-   <div class="sub" style="margin-top:6px">The pieces play one after the other. <b>⌥-click</b> the waveform to add the bar under the pointer (<b>⌥⇧</b> for a half bar); they are numbered there in the order they play.</div></div>`}
+   <div class="sub" style="margin-top:6px">The pieces play one after the other. <b>⌥-click</b> the waveform to add the bar under the pointer (<b>⌥⇧</b> for a half bar); each piece has its number and color there.</div></div>`}
+ // the spliced part's own waveform, cut at the joins and tinted piece by piece
+ function spliceDraw(id){const box=document.querySelector(`[data-mxpcstrip="${CSS.escape(id||'')}"]`),p=MX.slots[id];if(!box||!p)return;const c=box.querySelector('canvas'),dpr=devicePixelRatio||1,W=Math.round(c.clientWidth*dpr),H=Math.round(c.clientHeight*dpr);if(!W||!H)return;
+  c.width=W;c.height=H;const g=c.getContext('2d'),cut=cutOf(p),T=cutTotal(cut),fresh=p.buf&&!p._loading&&p._key&&p._key.endsWith('|'+cutKey(p))&&cutKey(p);
+  let at=0;cut.forEach(([b,l],i)=>{const x0=Math.round(at/T*W),x1=Math.round((at+l)/T*W);at+=l;g.fillStyle='rgba(255,255,255,.04)';g.fillRect(x0,0,x1-x0,H);
+   if(fresh||(!cutKey(p)&&p.buf)){const d=p.buf.getChannelData(0),per=d.length/W;g.fillStyle=TR.PIECE[i%TR.PIECE.length];
+    for(let x=x0;x<x1;x++){let m=0;for(let k=Math.floor(x*per),e=Math.min(d.length,Math.floor((x+1)*per));k<e;k+=Math.max(1,Math.floor(per/40)))m=Math.max(m,Math.abs(d[k]));const h=Math.max(1,m*(H-18)*2.2);g.fillRect(x,18+(H-18-Math.min(H-18,h))/2,1,Math.min(H-18,h))}}
+   g.fillStyle='#0b0d10';g.fillRect(x1-1,0,2,H)})}
  function trimHTML(stem){const p=MX.slots[stem];if(MX.trimOpen!==stem||!p||!isOS(stem))return'';
   const nb=(w,d,l)=>`<button class="tbtn" data-mxnudge="${stem}:${w}:${d}" title="${w?'end':'start'} ${d<0?'earlier':'later'} by 5 ms (shift-click: 1 ms)">${l}</button>`;
   return `<div class="mxtrimbox"><canvas class="mxtrim big" data-mxtrim="${stem}"></canvas>
@@ -4131,6 +4163,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   const os=isOS(id),d=os?(p.n||1)*barLenM()*(p.every||1):p.buf.duration;
   const phase=(((AC.currentTime-MX.t0)%d)+d)%d/d,x=os?phase:TR.playhead(id,phase);
   el.style.left=(x*100).toFixed(2)+'%';el.style.display=x<0||x>1?'none':'block';
+  if(MX.splice===id){const sl=document.querySelector('.mxpcstrip i');if(sl)sl.style.left=(phase*100).toFixed(2)+'%'}
  });phRaf=requestAnimationFrame(playheads)}
  // open a saved combination (also: back to it as saved, dropping what you changed since)
  function clearAll(){MX.order.forEach(retire);MX.slots={};MX.snaps=[];MX.trans=[];MX.snapSel=null;MX.snapsOf=null;MX.duck={};MX.info=null;MX.name='';MX.savedSig=null}
@@ -4148,7 +4181,8 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  const dbv=v=>(v>0?'+':'')+(+v||0).toFixed(1)+' dB';
  // (replacing the list blurs a focused field, whose change handler may ask for another draw: that one waits its turn)
  let drawing=false,drawAgain=false;
- function draw(){if(drawing){drawAgain=true;return}drawing=true;try{drawNow()}finally{drawing=false}if(drawAgain){drawAgain=false;draw()}}
+ function draw(){if(drawing){drawAgain=true;return}drawing=true;try{drawNow()}finally{drawing=false}if(drawAgain){drawAgain=false;draw()}
+  if(MX.splice)requestAnimationFrame(()=>spliceDraw(MX.splice))}
  function drawNow(){const L=$('list');if(st.tab!=='M'||!L)return;if(BLEND.pbDraw(L))return;const I=MX.info||{},fit=I.fit,restoreFocus=TR.retainFocus(L);
   if(MX.n===0){L.innerHTML=`<div class="empty">No songs are prepared for Mashup yet.<br>Run <code>digitalcrate stems</code> (about 2 minutes a song): it separates the sources of your favorites plus some random songs.</div>`;return}
   const row=id=>{
@@ -4340,6 +4374,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(t.id==='mxq'){MX.find.q=t.value;draw();return}if(t.id==='mxname'){MX.name=t.value;return}
   if(ds.mxdb){MX.slots[ds.mxdb].db=+t.value;apply(ds.mxdb);t.title=dbv(+t.value)+' · double-click for 0 dB'}
   else if(ds.mxfade){const [id,w]=ds.mxfade.split(':'),p=MX.slots[id];p[w]=+t.value;t.nextElementSibling.textContent=t.value+' ms';osTrimDraw(id,p)}
+  else if(ds.mxpcxf){t.nextElementSibling.textContent=t.value+' ms'}
   else if(t.id==='mxrvdecay'){t.parentNode.querySelector('output').textContent=(+t.value).toFixed(1)+' s'}markSave()});
  L.addEventListener('change',async e=>{if(st.tab!=='M')return;const t=e.target,ds=t.dataset;
   if(t.id==='mxmaster'){MX.mast.on=t.checked;BLEND.mxRoute(MX);mxMeter();save();markSave();return}
@@ -4354,6 +4389,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    apply(id);  // reroute any echoes while the new part loads
    await roll(id);if(MX.slots[id]&&MX.slots[id]._blank){retire(id);delete MX.slots[id];await sync()}return}
   if(t.id==='mxload'){const m=(MX.saved||[]).find(x=>x.name===t.value);if(!m)return;await openSaved(m);return}
+  if(ds.mxpcxf){const p=MX.slots[ds.mxpcxf];p.xf=+t.value;await setCut(ds.mxpcxf,cutOf(p));return}
   if(ds.mxpcb||ds.mxpcl){const [id,i]=(ds.mxpcb||ds.mxpcl).split(':'),cut=cutOf(MX.slots[id]);
    if(ds.mxpcb){const v=parseFloat(t.value);if(!Number.isFinite(v))return;cut[+i][0]=v-1}else cut[+i][1]=+t.value;
    await setCut(id,cut);return}

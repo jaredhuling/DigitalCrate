@@ -104,8 +104,10 @@ Hover over the song for the full name and why that part was picked.
   click elsewhere closes it). **Other takes** goes through other
   stretches of the same song. **Splice pieces…** builds the part from pieces of its song played one after the other: set each
   piece's bar and length (whole bars; ½ and 1½ are in the menu, and 12.5 as a bar means the middle of bar 12), add
-  one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), reorder with ◀, remove with ✕. The
-  waveform numbers the pieces in the order they play. Moving the loop, or **one stretch again**, drops the splice.
+  one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), reorder with ◀, remove with ✕. A
+  strip shows what plays, left to right, each piece in its own color; the song's waveform shows where each comes
+  from in the same color, and the play line goes through them in turn. **Crossfade** blends every join (and where
+  the loop comes round): each piece runs on a moment into its song, fading out under the next. Moving the loop, or **one stretch again**, drops the splice.
   **Play it as a one-shot** turns the part into a one-shot track: the same audio, placed
   on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
   ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
