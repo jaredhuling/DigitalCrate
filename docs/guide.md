@@ -90,6 +90,9 @@ Hover over the song for the full name and why that part was picked.
 - **Keys within a song:** a long piece can pass through several keys. Each prepared song has a chord for every bar
   and a key for each stretch, and a part is shifted by the key of its own bars (the track shows it). Songs prepared
   earlier get this from `digitalcrate stems --chords-only` (about a second a song).
+- **Mining for Mashup too:** on the Processing page, **also prepare them for Mashup** keeps each mined song's stems
+  as well (from the separation mining already makes: about 80 MB and a minute more a song). From the command line:
+  `digitalcrate process … --mashup`.
 - **＋ new** starts a new mashup: a clean slate with a first combination dealt. It asks first if you have unsaved
   changes. **Clear all** leaves the slate empty.
 - **Tops** holds the hi-hat, ride and crash. Pick them with the Tops button in the song list. Drums plays the
@@ -101,7 +104,8 @@ Hover over the song for the full name and why that part was picked.
   songs it dealt lately (also after a reload) and leaves them out, and draws from the best-fitting quarter of the rest. **All** deals every unlocked track. **↶ ↷** go back and
   forward through its parts. **S** solos the track, **M** mutes it, and the volume slider resets to 0 dB on a double-click.
 - **⋯** opens the track's options. **Choose the song** opens a search and uses the song's best-fitting bars (✕, **Esc** or a
-  click elsewhere closes it). **Other takes** goes through other
+  click elsewhere closes it). **Best fits…** lists the parts that fit the harmony playing best, in order, with how well each fits
+  (the die draws from the good ones; this shows you the top 8 to 40): click one to hear it, and the next. **Other takes** goes through other
   stretches of the same song. **Splice pieces…** builds the part from pieces of its song played one after the other: set each
   piece's bar and length (whole bars; ½ and 1½ are in the menu, and 12.5 as a bar means the middle of bar 12), add
   one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), drag a block to reorder (or use ←), remove with ✕. A piece can play backwards (**rev**), take
@@ -114,7 +118,12 @@ Hover over the song for the full name and why that part was picked.
   on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
   ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
-  **＋ add slot** adds another track, up to eight. Drag a track by its name to move it up or down.
+  **＋ add slot** adds another track, up to sixteen. Drag a track by its name to move it up or down.
+- **Pad tracks** hold a library pad (a held chord, strings, a vocal bed) under the cycle: add one with **＋ add slot →
+  pad**. The die deals one whose notes sit on every bar's harmony, shifted to the key; it starts as one hit that
+  lasts the whole cycle, going round the sample's seamless loop where the library found one, with a soft fade in and
+  out. It is a one-shot track with **∞ hold** on (in **Shape**), so everything a one-shot does works: more hits
+  re-attack the pad, and trim, fades and effects apply.
 - **Rating on a track:** a stem track has **+** and **−** (this part works here, or doesn't: they teach the
   recommendations for that part alone); a one-shot track has **fav** and **no**, the library's favorite and
   not-for-me for that sample. **Clear all** empties the mixer.

@@ -190,22 +190,29 @@ def _rough_tops(drums):
     return {"hh": sosfiltfilt(butter(4, 6000, fs=C.SR, btype="highpass", output="sos"), drums, axis=1).astype(np.float32)}
 
 
-def prepare_track(con, row, separate=True):
+def prepare_track(con, row, separate=True, have=None):
     """Separate one song and keep its stems (FLAC) and meta. Returns the meta, or None if it can't be used (no steady
-    4/4 found: nothing to line up)."""
+    4/4 found: nothing to line up).
+    have: what mining already worked out for this song, so nothing is done twice: dict(tk=its tempo and key,
+    bars=its bar lines, stems=its separated stems)."""
     import librosa
     import soundfile as sf
     from . import models
     from .analyze import SourceFeat, bars, track_tempo_key
     from .audio import decode, to_mono48
     from .policy import classify_track
-    y = decode(row["path"])
-    tk = track_tempo_key(y)
-    bt, _ = bars(tk, y, SourceFeat(y))
+    if have:
+        tk, bt = have["tk"], have["bars"]
+    else:
+        y = decode(row["path"])
+        tk = track_tempo_key(y)
+        bt, _ = bars(tk, y, SourceFeat(y))
     bt = np.asarray(bt, float)
     if not tk["tempo_ok"] or len(bt) < 17:
         return None
-    if separate:
+    if have:
+        st = have["stems"]
+    elif separate:
         st = models.separate(y)
     else:  # tests: no separator, rough stand-ins from the mix
         h, p = librosa.effects.hpss(y.mean(0))
@@ -1056,7 +1063,7 @@ def cycle_harmony(state, n, lib=None):
     return H / (np.linalg.norm(H, axis=1, keepdims=True) + 1e-9)
 
 
-def oneshot(state, n=1, avoid=(), rng=None, path=None):
+def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0):
     """A library sample for a one-shot slot with a cycle of n bars: drawn from the best by fit + taste (or `path`:
     the one you chose). Comes with the bar it fits best (its first hit goes there) and its fit to every bar."""
     rng = rng or np.random.default_rng()
@@ -1107,20 +1114,176 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None):
         if not ok.any():
             return None
         cand = np.where(ok)[0]
-        top = cand[np.argsort(-score[cand])[:40]]
-        p = np.exp((score[top] - score[top].max()) / 0.35)
-        k = int(rng.choice(top, p=p / p.sum()))
+        best40 = cand[np.argsort(-score[cand])[:40]]
+        p = np.exp((score[best40] - score[best40].max()) / 0.35)
+        k = int(rng.choice(best40, p=p / p.sum()))
+    def part(k):
+        r = rows[k]
+        return dict(stem="oneshot", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
+                    sub=r["subtype"], cat=r["category"], dur=round(float(r["dur"]), 2), n=n, steps=[int(best[k]) * 16], every=1,
+                    off=0, semis=int(semis[k]), key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
+                    fit=[round(float(v), 3) for v in F[k]],
+                    why=dict(fit=round(float(F[k].max()), 3), taste=round(float(z[k]), 2)))
+    if top:  # the best fits, in order (top_fits)
+        return [part(int(i)) for i in cand[np.argsort(-F.max(1)[cand])[:top]]]
+    return part(k)
+
+
+# ---------------------------------------------------------------- pad tracks
+# A pad track holds a library pad (a held chord, strings, a vocal bed) under the cycle: the same machinery as a one-shot
+# slot, with "hold" on: a hit sustains until the next one, on the sample's seamless loop where it has one.
+
+PAD_CATS = ("Pads & Atmospheres", "Strings & Orchestral", "Vocal Atmospheres")
+_PADS = dict(n=-1, rows=[], ch=None)
+
+
+def _pads(con):
+    n = con.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+    if _PADS["n"] != n:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(samples)")}
+        loop = "s.loop_q" if "loop_q" in cols else "NULL"
+        rows = con.execute(rf"""SELECT s.id, s.path, s.category, s.subtype, s.kind, s.dur, s.key, s.scale, s.key_from,
+                                s.chroma, {loop} loop_q, t.artist, t.title FROM samples s JOIN tracks t ON t.id = s.track_id
+                                WHERE s.parent_id IS NULL AND s.path NOT LIKE '\_Reference%' ESCAPE '\'
+                                AND s.chroma IS NOT NULL AND s.dur >= 1.5
+                                AND s.category IN ({','.join('?' * len(PAD_CATS))})""", PAD_CATS).fetchall()
+        ch = np.array([json.loads(r["chroma"]) for r in rows], float).reshape(len(rows), 12)
+        ch /= np.linalg.norm(ch, axis=1, keepdims=True) + 1e-9
+        _PADS.update(n=n, rows=[dict(r) for r in rows], ch=ch)
+    return _PADS
+
+
+def pad(state, n=4, avoid=(), rng=None, path=None, top=0):
+    """A library pad for a pad track with a cycle of n bars: drawn from the best by how well its notes sit on the
+    harmony of every bar of the cycle (it sounds through all of them), your taste, and whether it can be held
+    seamlessly. Or `path`: the one you chose. It starts as one held hit at the top of the cycle."""
+    rng = rng or np.random.default_rng()
+    con = _db()
+    P = _pads(con)
+    rows, ch = P["rows"], P["ch"]
+    if not rows:
+        return None
+    n = max(1, int(n or 4))
+    target = target_key(state)
+    semis = np.zeros(len(rows), int)
+    if target:
+        for i, r in enumerate(rows):
+            if r["key_from"] != "none" and r["key"] in NOTES:
+                semis[i] = key_semis(dict(pc=NOTES.index(r["key"]), scale=r["scale"] or "major"), target)
+    H = cycle_harmony(state, n)
+    F = np.full((len(rows), n), 0.5)
+    if H is not None:
+        for sft in np.unique(semis):
+            m = semis == sft
+            F[m] = np.roll(ch[m], int(sft), axis=1) @ H.T
+    try:
+        from .taste import cached_scores
+        sc = cached_scores() or {}
+        bad = {r[0] for r in con.execute("SELECT path FROM events WHERE type='dislike' GROUP BY path "
+                                         "HAVING MAX(ts) = MAX(CASE WHEN value = 1 THEN ts END)")}
+    except Exception:
+        sc, bad = {}, set()
+    t = np.array([sc.get(r["path"], np.nan) for r in rows], float)
+    z = (t - np.nanmean(t)) / (np.nanstd(t) + 1e-9) if np.isfinite(t).any() else np.zeros(len(rows))
+    z = np.clip(np.nan_to_num(z), -2, 2)
+    holds = np.array([r["loop_q"] is not None for r in rows], float)
+    own = np.array([r["category"] == "Pads & Atmospheres" for r in rows], float)  # (strings outnumber pads 3 to 1)
+    score = 4.0 * F.mean(1) + 0.35 * z + 0.3 * holds + 0.15 * own - 0.15 * np.abs(semis) / 6
+    if path is not None:
+        idx = [i for i, r in enumerate(rows) if r["path"] == path]
+        if not idx:
+            return None
+        k = idx[0]
+    else:
+        ok = np.array([r["path"] not in bad and r["path"] not in avoid for r in rows])
+        if not ok.any():
+            return None
+        cand = np.where(ok)[0]
+        if top:  # the best fits, in order (top_fits)
+            return [_pad_part(rows, int(i), n, semis, F, z, holds) for i in cand[np.argsort(-F.mean(1)[cand])[:top]]]
+        best60 = cand[np.argsort(-score[cand])[:60]]
+        p = np.exp(-np.arange(len(best60)) / 20.0)  # by rank: it moves through the best sixty
+        k = int(rng.choice(best60, p=p / p.sum()))
+    return _pad_part(rows, k, n, semis, F, z, holds)
+
+
+def _pad_part(rows, k, n, semis, F, z, holds):
     r = rows[k]
-    return dict(stem="oneshot", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
-                sub=r["subtype"], cat=r["category"], dur=round(float(r["dur"]), 2), n=n, steps=[int(best[k]) * 16], every=1,
-                off=0, semis=int(semis[k]), key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
+    return dict(stem="pad", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
+                sub=r["subtype"], cat=r["category"], dur=round(float(r["dur"]), 2), n=n, steps=[0], every=1, off=0,
+                hold=True, fin=40, fout=350, semis=int(semis[k]),
+                key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
                 fit=[round(float(v), 3) for v in F[k]],
-                why=dict(fit=round(float(F[k].max()), 3), taste=round(float(z[k]), 2)))
+                why=dict(fit=round(float(F[k].mean()), 3), taste=round(float(z[k]), 2), holds=bool(holds[k])))
+
+
+def top_fits(role, state, slot=None, n=None, top=12):
+    """The parts that fit the harmony playing best, in order (not a draw): for a stem track, each song's best-fitting
+    bars; for a one-shot or pad track, library samples. Drums and Tops have no harmony: theirs are ranked by the
+    overall score. -> [part with "fitp": 0..1]"""
+    top = max(1, min(40, int(top or 12)))
+    if role in ("oneshot", "pad"):
+        cur = (state.get("slots") or {}).get(slot) or {}
+        fn = pad if role == "pad" else oneshot
+        out = fn(state, int(n or cur.get("n") or (4 if role == "pad" else 1)), top=top) or []
+        for p in out:
+            p["fitp"] = p["why"]["fit"]
+        return out
+    slot = slot or role
+    lib, con = library(), _db()
+    w, _ = weights(con)
+    taste = _taste(con)
+    cur = (state.get("slots") or {}).get(slot) or {}
+    n = int(n or cur.get("n") or 4)
+    target = target_key(state, skip=slot)
+    playing = {int(p["track"]) for sid, _, p in _parts(state, lib) if sid != slot}
+    cands = _candidates(role, state, lib, taste, target, w, n, playing, slot=slot)
+    pitched = role in PITCHED and any(sid != slot and s_ in PITCHED for sid, s_, _ in _parts(state, lib))
+    cands.sort(key=lambda c: -(c[4][3] if pitched else c[0]))
+    seen, out = set(), []
+    for sc, tid, b, semis, x, k in cands:
+        if tid in seen:
+            continue
+        seen.add(tid)
+        m = lib[tid]
+        part = dict(stem=role, track=tid, bar0=b, n=n, k=k, off=0, artist=m["artist"], title=m["title"], semis=semis,
+                    bars=len(m["bars"]) - 1, why=dict(zip(FEATURES, [round(float(v), 3) for v in x])), score=round(sc, 3),
+                    fitp=round(float(x[3]), 3) if pitched else None)
+        if role == "bass":
+            part["cond"] = basscond.VERSION
+        out.append(part)
+        if len(out) >= top:
+            break
+    return out
+
+
+def _sustain(y, frames, path):
+    """A hit held for `frames`: the sample, going round its seamless loop (where the library found one) until then."""
+    if y.shape[1] >= frames:
+        return y[:, :frames]
+    try:
+        r = connect().execute("SELECT dur, loop_start, loop_end FROM samples WHERE path=?", (path,)).fetchone()
+        a, b = r["loop_start"], r["loop_end"]
+        k = y.shape[1] / (float(r["dur"]) * C.SR)  # the sample was re-pitched to the key: its loop points move with it
+        a, b = int(a * C.SR * k), min(y.shape[1], int(b * C.SR * k))
+        if b - a < 2000:
+            raise ValueError
+    except Exception:
+        return np.pad(y, ((0, 0), (0, frames - y.shape[1])))
+    x = min(int(0.05 * C.SR), (b - a) // 4)  # each time round, 50 ms of crossfade
+    ramp = np.linspace(0, 1, x, dtype=np.float32)
+    out, have = [y[:, :b].copy()], b
+    while have < frames:
+        prev = out[-1]
+        prev[:, -x:] = prev[:, -x:] * ramp[::-1] + y[:, a:a + x] * ramp
+        out.append(y[:, a + x:b].copy())
+        have += b - a - x
+    return np.concatenate(out, axis=1)[:, :frames]
 
 
 # ---------------------------------------------------------------- to Ableton Live (docs/plans/mashup-ableton.md)
 
-ROLE_CAT = dict(drums="Percussion", tops="Percussion", bass="Bass & Sub", vocals="Vocals", other="Chords & Keys", oneshot="Vocal Atmospheres")
+ROLE_CAT = dict(pad="Pads & Atmospheres", drums="Percussion", tops="Percussion", bass="Bass & Sub", vocals="Vocals", other="Chords & Keys", oneshot="Vocal Atmospheres")
 
 
 def shot_source(sample, key, bpm):
@@ -1192,9 +1355,10 @@ def oneshot_loop(p, bpm, key, out):
     if p.get("back"):
         y = y[:, ::-1]  # played backwards
 
-    def hit(frac):
+    def hit(frac, src=None):
         """The piece as one hit plays: its first `frac` (a step can play half or a quarter), with your fades."""
-        h = y[:, :max(1, int(y.shape[1] * frac))].copy()
+        src = y if src is None else src
+        h = src[:, :max(1, int(src.shape[1] * frac))].copy()
         for ms, tail in ((p.get("fin") or 3, False), (p.get("fout") or 3, True)):  # 3 ms at least: no clicks
             f = min(int(max(3.0, float(ms)) / 1000 * C.SR), h.shape[1] // 2)
             if f:
@@ -1211,9 +1375,15 @@ def oneshot_loop(p, bpm, key, out):
     N = int(round(beats * 60.0 / float(bpm) * C.SR))
     loop = np.zeros((2, N), np.float32)
     step = 60.0 / float(bpm) / 4 * C.SR
-    for st in p.get("steps") or []:
+    steps_ = sorted(int(v) for v in p.get("steps") or [])
+    for st in steps_:
         a = int(round(st * step))
-        y1 = hit(gate.get(int(st), 1.0))
+        if p.get("hold") and not warped and not p.get("back"):  # held until the next hit (or once round, with one hit)
+            later = [s2 for s2 in steps_ if s2 > st]
+            gap = ((later[0] if later else steps_[0] + n * 16 * every) - st) * step
+            y1 = hit(1.0, _sustain(y, int(gap), p["sample"]))
+        else:
+            y1 = hit(gate.get(int(st), 1.0))
         seg = y1[:, :max(0, N - a)]
         loop[:, a:a + seg.shape[1]] += seg
         if y1.shape[1] > N - a:  # it rings past the end: into the start of the next time round
@@ -1249,10 +1419,10 @@ def export(name, bpm, key, sections, bars=8, reveal=True):
             if not p or p.get("mute"):
                 continue
             role = (sec.get("roles") or {}).get(sid) or p.get("stem") or sid
-            if role == "oneshot":
+            if role in ("oneshot", "pad"):
                 if not p.get("sample") or not p.get("steps"):
                     continue
-                f = dest / "Parts" / (_safe(f"One-shot - {p.get('artist', '')} - {p.get('title', '')}")[:70] + f" {sid[-4:]}{si}.wav")
+                f = dest / "Parts" / (_safe(f"{'Pad' if role == 'pad' else 'One-shot'} - {p.get('artist', '')} - {p.get('title', '')}")[:70] + f" {sid[-4:]}{si}.wav")
                 beats = oneshot_loop(p, bpm, key, f)
                 label = f"{p.get('artist', '')} — {p.get('title', '')} (one-shot)"
             elif p.get("track") is not None and int(p["track"]) in lib:

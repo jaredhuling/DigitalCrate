@@ -66,6 +66,8 @@ def main():
     p.add_argument("--ids-file", help="a JSON list of track ids to mine (e.g. from the Processing page)")
     p.add_argument("--build", action="store_true", help="rebuild the browser page when done")
     p.add_argument("--words", action="store_true", help="transcribe the new vocal samples' words before rebuilding")
+    p.add_argument("--mashup", action="store_true",
+                   help="also keep each song's stems for Mashup (about 80 MB and a minute more a song)")
     p.add_argument("--separate", choices=["auto", "always", "never"], default="auto",
                    help="auto: separate stems unless the track is already drumless")
     p.add_argument("--reprocess", action="store_true")
@@ -198,7 +200,7 @@ def main():
             where = f"({where}) AND scout_done=1 AND {w}"
             a.limit = a.top
         run(where, params, a.separate, a.limit, a.reprocess, vocals=a.vocals,
-            include_reference=a.reference, order_by=order)
+            include_reference=a.reference, order_by=order, mashup=a.mashup)
         if a.words:
             print("WORDS: transcribing new vocal samples…", flush=True)
             from .lyrics import run as words

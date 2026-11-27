@@ -45,6 +45,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:4px 6px 4px 
     <div class="row"><label>Songs <input id="n" type="number" min="5" max="1000" value="200" style="width:80px"></label>
       <label class="sub"><input type="checkbox" id="words" checked> transcribe the words</label>
       <label class="sub"><input type="checkbox" id="build" checked> rebuild the library page when done</label>
+      <label class="sub" title="Mining cuts samples from a song. Mashup needs the whole song's stems (drums, bass, vocals, the rest), which this keeps as well: about 80 MB and a minute more a song. Songs without a steady 4/4, and ones with nothing to separate, are left out."><input type="checkbox" id="mashup"> also prepare them for Mashup</label>
       <button id="preview">Preview</button><button class="go" id="start" disabled>Start</button></div>
     <div id="plan" class="plan" hidden></div>
   </section>
@@ -67,6 +68,7 @@ const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"]/g,c
 const DEFAULT_SKIP=['Electronic','Hip-Hop','Rock & Indie'];
 let mode='breadth',skip=new Set(DEFAULT_SKIP),A=null,PLAN=null,armed=null,timer=null;
 try{const s=JSON.parse(localStorage.getItem('actSkip'));if(Array.isArray(s))skip=new Set(s)}catch(e){}
+try{document.getElementById('mashup').checked=localStorage.getItem('actMashup')==='1';document.getElementById('mashup').addEventListener('change',e=>{try{localStorage.setItem('actMashup',e.target.checked?'1':'0')}catch(err){}})}catch(e){}
 const ago=t=>{if(!t)return'';const s=Date.now()/1000-t;return s<90?'just now':s<5400?Math.round(s/60)+' min ago':s<129600?Math.round(s/3600)+' h ago':Math.round(s/86400)+' days ago'};
 const utc=s=>s?Date.parse(s.replace(' ','T')+'Z')/1000:0;
 const fmt=n=>Number(n).toLocaleString();
@@ -140,7 +142,7 @@ document.addEventListener('click',async e=>{
     armed=null;s.disabled=true;s.textContent='stopping…';await fetch('api/activity/stop',{method:'POST',body:JSON.stringify({id})});setTimeout(load,800)}});
 $('preview').onclick=preview;$('n').onchange=preview;
 $('start').onclick=async()=>{$('start').disabled=true;
-  const r=await (await fetch('api/activity/start',{method:'POST',body:JSON.stringify({mode,n:+$('n').value,skip:[...skip],build:$('build').checked,words:$('words').checked})})).json();
+  const r=await (await fetch('api/activity/start',{method:'POST',body:JSON.stringify({mode,n:+$('n').value,skip:[...skip],build:$('build').checked,words:$('words').checked,mashup:$('mashup').checked})})).json();
   if(r.error){$('plan').innerHTML+=`<div class="err" style="margin-top:6px">${esc(r.error)}</div>`}else{PLAN=null;$('plan').hidden=true}
   load()};
 function drawTasks(){const T=(A&&A.analysis)||[];$('tasks').innerHTML=T.map(t=>{const pct=t.total?Math.round(t.done/t.total*100):0;

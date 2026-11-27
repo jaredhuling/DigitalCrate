@@ -2345,7 +2345,7 @@ def test_old_drums_parts_in_a_full_mixer(site, page):
       Storage.prototype.setItem=()=>{}})()""")   # (the page being left mustn't autosave over it: a render may still be finishing)
     page.reload()
     page.wait_for_function("typeof st!=='undefined'&&st.tab==='M'&&CRATE.MX.order.length===13", timeout=60000)   # 8 tracks, 5 of them old Drums
-    assert page.locator("#mxadd").count() == 0
+    assert page.locator("#mxadd").count() == 1                                       # (16 tracks at most now: room for more)
 
 
 VDUCK_AUDIO = """async () => {
@@ -3678,6 +3678,10 @@ def test_pieces_stretch_repeat_rest_and_are_dragged(site, page):
     assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/render'&&c[1].stem==='vocals'&&c[1].cut).pop()[1].cut") == [[b0, 1, 0, 2, 3], [None, 1]]
     labels = page.evaluate("[...document.querySelectorAll('.mxpcstrip>span')].map(e=>e.innerText.trim())")
     assert labels == [f"1 bar {b0 + 1} · 2× long ×3", "2 rest · 1 bar"]
+    # how long it is in all, said against the other tracks (4-bar loops here: 7 bars doesn't line up), with a bar ruler
+    said = page.inner_text('[data-mxpclen="vocals"]')
+    assert said.startswith("7 bars") and "does not line up" in said and "(4 bars)" in said
+    assert page.locator(".mxpcruler>span").count() == 7
     assert "7 bars" in page.inner_text('[data-mxrow="vocals"] .trbars')
     assert page.evaluate("CRATE.MX.slots.vocals.buf.getChannelData(0).slice(-20000,-2000).every(v=>Math.abs(v)<1e-4)")   # the rest is silent
     # drag the rest in front of the piece
@@ -3750,8 +3754,8 @@ def test_tracks_are_rated_where_they_play(site, page):
     Mashup's recommendations for that part."""
     _mixer(site, page)
     sent = []
-    page.route("**/api/stems/event", lambda r: (sent.append(json.loads(r.request.post_data)), r.fulfill(status=200, body='{"rated":1}')))
-    page.route("**/api/event", lambda r: (sent.append(json.loads(r.request.post_data)), r.fulfill(status=200, body="{}")))
+    # (watched, not intercepted: the page reloads your ratings from the server now and then, and must find them there)
+    page.on("request", lambda r: sent.append(json.loads(r.post_data)) if r.url.endswith("/api/stems/event") else None)
     page.click('[data-mxpart="bass:1"]')
     page.wait_for_function("CRATE.MX.slots.bass.rated===1")
     assert any(e.get("kind") == "like" and e.get("stem") == "bass" for e in sent)
@@ -3760,12 +3764,62 @@ def test_tracks_are_rated_where_they_play(site, page):
     assert any(e.get("kind") == "dislike" and e.get("stem") == "bass" for e in sent)
     sid = _one_shot(page)
     path = page.evaluate(f"CRATE.MX.slots['{sid}'].sample")
-    page.click(f'[data-mxfav="{sid}"]')
-    page.wait_for_function(f"FAV.has({json.dumps(path)})&&document.querySelector('[data-mxfav=\"{sid}\"]').classList.contains('on')", timeout=10000)
-    page.click(f'[data-mxfav="{sid}"]')
-    page.wait_for_function(f"!FAV.has({json.dumps(path)})", timeout=10000)
-    page.click(f'[data-mxnope="{sid}"]')
-    page.wait_for_function(f"TASTE.disliked.has({json.dumps(path)})", timeout=10000)
-    page.click(f'[data-mxnope="{sid}"]')
-    page.wait_for_function(f"!TASTE.disliked.has({json.dumps(path)})", timeout=10000)
+    pj = json.dumps(path)
+    for btn, has in (("mxfav", f"FAV.has({pj})"), ("mxnope", f"TASTE.disliked.has({pj})")):   # (another test may have rated it already)
+        was = page.evaluate(has)
+        page.click(f'[data-{btn}="{sid}"]')
+        page.wait_for_function(f"{has}==={'false' if was else 'true'}&&document.querySelector('[data-{btn}=\"{sid}\"]').classList.contains('on')==={'false' if was else 'true'}", timeout=10000)
+        page.click(f'[data-{btn}="{sid}"]')
+        page.wait_for_function(f"{has}==={'true' if was else 'false'}", timeout=10000)
     assert page.evaluate("document.documentElement.scrollWidth<=document.documentElement.clientWidth")   # nothing pushed off the side
+
+
+def test_a_pad_track_holds_a_library_pad(site, page):
+    """A Pad track: the dice deals a library pad that fits, held under the whole cycle (one hit, hold on, long fades);
+    its search looks through pads; hold can be switched per track."""
+    _mixer(site, page)
+    n_pads = page.evaluate("S.filter(s=>['Pads & Atmospheres','Strings & Orchestral','Vocal Atmospheres'].includes(s[F.cat])&&s[F.dur]>=1.5&&!s[F.parent]).length")
+    if not n_pads:
+        pytest.skip("the test library has no pads")
+    _calls(page)
+    page.select_option("#mxaddrole", "pad"); page.click("#mxadd")
+    page.wait_for_function("CRATE.MX.order.some(id=>CRATE.MX.roles[id]==='pad'&&CRATE.MX.slots[id]&&CRATE.MX.slots[id].buf)", timeout=120000)
+    sid = page.evaluate("CRATE.MX.order.find(id=>CRATE.MX.roles[id]==='pad')")
+    p = page.evaluate(f"(p=>({{hold:p.hold,steps:p.steps,n:p.n,cat:p.cat,fout:p.fout}}))(CRATE.MX.slots['{sid}'])")
+    assert p["hold"] is True and p["steps"] == [0] and p["n"] == 4 and p["fout"] >= 100
+    assert p["cat"] in ("Pads & Atmospheres", "Strings & Orchestral", "Vocal Atmospheres")
+    assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/oneshot').pop()[1].kind") == "pad"
+    assert "Pad" in page.inner_text(f'[data-mxrow="{sid}"] .trname')
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots['%s'].hold" % sid) is True
+    # held: a hit is asked to last the whole cycle (4 bars at 100 bpm), not just the sample's length
+    got = page.evaluate(f"""(()=>{{const p=CRATE.MX.slots['{sid}'];let stopAt=null;const mk=AC.createBufferSource.bind(AC);
+      AC.createBufferSource=()=>{{const s=mk(),st=s.stop.bind(s),sa=s.start.bind(s);let t0=0;s.start=(w,...a)=>{{t0=w;return sa(w,...a)}};s.stop=w=>{{if(w!=null)stopAt=w-t0;return st(w)}};return s}};
+      CRATE.mxPlay(false);CRATE.mxPlay(true);return new Promise(r=>setTimeout(()=>{{AC.createBufferSource=mk;r(stopAt)}},600))}})()""")
+    assert got is not None and abs(got - 4 * 2.4) < 0.1
+    page.click(f'[data-mxrow="{sid}"] [data-mxtrimopen]')
+    page.click(f'[data-mxhold="{sid}"]')
+    assert page.evaluate(f"CRATE.MX.slots['{sid}'].hold") is False
+
+
+def test_best_fits_lists_what_fits_in_order(site, page):
+    """⋯ → Best fits…: the parts that fit the harmony best, in order (the dice draws; this lists). A click puts one in,
+    and the list stays open to try the next."""
+    _mixer(site, page)
+    page.click('[data-mxrow="bass"] [data-trmore]'); page.click('[data-mxrow="bass"] .trmenu [data-mxbest]')
+    page.wait_for_function("CRATE.MX.best&&!CRATE.MX.best.loading&&CRATE.MX.best.parts.length>0", timeout=60000)
+    parts = page.evaluate("CRATE.MX.best.parts.map(p=>[p.track,p.fitp])")
+    fits = [f for _, f in parts]
+    assert all(f is not None for f in fits) and fits == sorted(fits, reverse=True)      # most harmonious first
+    assert len({t for t, _ in parts}) == len(parts)                                      # one entry a song
+    playing = page.evaluate("['vocals','other'].map(s=>CRATE.MX.slots[s].track)")
+    assert not set(playing) & {t for t, _ in parts}                                      # not a song already in another track
+    assert "%" in page.inner_text(".mxbest")
+    page.click('[data-mxbestpick="bass:0"]')
+    page.wait_for_function(f"CRATE.MX.slots.bass.track==={parts[0][0]}&&CRATE.MX.slots.bass.buf&&!CRATE.MX.slots.bass._loading", timeout=120000)
+    assert page.locator(".mxbest").count() == 1
+    page.click(".mxbest [data-mxbestx]")
+    assert page.locator(".mxbest").count() == 0
+    # drums have no harmony: the list says so and is still in order of the overall score
+    page.click('[data-mxrow="drums"] [data-trmore]'); page.click('[data-mxrow="drums"] .trmenu [data-mxbest]')
+    page.wait_for_function("CRATE.MX.best&&CRATE.MX.best.id==='drums'&&!CRATE.MX.best.loading", timeout=60000)
+    assert "no harmony" in page.inner_text(".mxbest")

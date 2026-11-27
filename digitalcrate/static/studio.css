@@ -167,7 +167,7 @@ body.mash .projbar{display:none}
 .trh{display:flex;height:30px;min-width:0;gap:8px;align-items:center;white-space:nowrap}
 .trh>*{flex:none}.trh .trsrc{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* new part, back and forward sit straight after the song's text; what is left of the row's width comes after them */
-.trh .trname{width:74px}.trh .trrate .tbtn{min-width:20px;padding:1px 3px;font-size:11px;opacity:.75}.trh .trrate .tbtn.on{opacity:1;border-color:var(--acc)}.trh .trsrc{margin-right:auto}
+.trh .trname{width:92px}.trh .trrate .tbtn{min-width:20px;padding:1px 3px;font-size:11px;opacity:.75}.trh .trrate .tbtn.on{opacity:1;border-color:var(--acc)}.trh .trsrc{margin-right:auto}
 /* the die deals a new part: the loudest control in a track's header, and in the top bar */
 .die{display:block;transition:transform .15s ease-out}
 .trh .tbtn.trdie{min-width:26px;padding:1px 4px}
@@ -211,4 +211,14 @@ body.mash .projbar{display:none}
 .mxpcstrip>span{position:absolute;top:0;height:17px;padding:1px 5px;font-size:11px;white-space:nowrap;overflow:hidden;color:#111;background:var(--pc);box-sizing:border-box;border-right:2px solid #0b0d10}
 .mxpcstrip>span{cursor:grab}.mxpcstrip>span.rest{background:repeating-linear-gradient(45deg,#2a2f38,#2a2f38 5px,#1c2027 5px,#1c2027 10px);color:var(--ink)}.mxpc>i{cursor:grab}.trname[draggable]{cursor:grab}
 .mxpc>i{color:#111!important;background:var(--pc);border-radius:3px;text-align:center;padding:0 3px}
-.mxpc{display:inline-flex;gap:4px;align-items:center;padding:3px 5px;border:1px solid var(--line);border-radius:6px;background:#0e1013}.mxpc>i{font-style:normal;font-weight:700;color:var(--mute);min-width:10px}.mxpc input{width:58px}
+.mxpcs{display:grid;grid-template-columns:28px minmax(120px,max-content) max-content max-content max-content max-content 1fr;gap:4px 12px;align-items:center;margin-top:8px;max-height:232px;overflow:auto}
+.mxpch,.mxpc{display:contents}.mxpch>span{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+.mxpc>*{padding-top:1px;padding-bottom:1px}.mxpc>i{font-style:normal;font-weight:700;min-width:10px}.mxpc input{width:64px}.mxpc .mxpcend{display:flex;gap:4px;justify-content:flex-end}
+.mxpc.hi>*:not(i){background:rgba(255,255,255,.06)}
+.mxpctop{display:flex;gap:12px;align-items:baseline;margin-bottom:4px}.mxpclen{margin-left:auto;font-size:12px;white-space:nowrap}.mxpclen b{font-size:15px;color:var(--ink)}.mxpclen .ok{color:#9fd08a}.mxpclen .off{color:#ee8f7f}
+.mxpcruler{position:relative;height:14px;margin-top:2px}.mxpcruler>span{position:absolute;top:0;padding-left:3px;border-left:1px solid var(--line);font:10px ui-monospace,Menlo,monospace;color:var(--mute)}
+.trname[draggable]::after{content:"⋮⋮";opacity:.4;margin-left:auto;letter-spacing:-2px;font-weight:400}
+.mxpc>i>u,.trgrip{text-decoration:none;opacity:.55;margin-right:3px;letter-spacing:-2px;font-weight:400}
+.mxpcstrip>span.dropbefore{box-shadow:inset 4px 0 0 #fff}.mxpcstrip>span.dropafter{box-shadow:inset -4px 0 0 #fff}.mxpcstrip>span.dragging{opacity:.35}
+.mxpc.dropbefore>*{box-shadow:0 -2px 0 #fff}.mxpc.dropafter>*{box-shadow:0 2px 0 #fff}.mxpc.dragging>*{opacity:.35}
+.trk.dropbefore{box-shadow:0 -3px 0 var(--acc)}.trk.dropafter{box-shadow:0 3px 0 var(--acc)}.trk.dragging{opacity:.4}.mxpc.hi>i,.mxpcstrip>span.hi{outline:2px solid #fff;outline-offset:-2px}

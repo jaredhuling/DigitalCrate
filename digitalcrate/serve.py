@@ -631,6 +631,12 @@ class Handler(SimpleHTTPRequestHandler):
                 if what == "export":
                     return self._json(SM.export(req.get("name") or "Mashup", float(req.get("bpm") or 100), req.get("key"),
                                                 req.get("sections") or [], req.get("bars") or 8, req.get("reveal", True)))
+                if what == "best":
+                    return self._json(dict(parts=SM.top_fits(req["role"], state, req.get("slot"), req.get("n"),
+                                                             req.get("top") or 12)))
+                if what == "oneshot" and req.get("kind") == "pad":
+                    return self._json(dict(part=SM.pad(state, req.get("n") or 4, set(req.get("avoid") or []),
+                                                       path=req.get("path")), info=SM.info(state)))
                 if what == "oneshot":
                     return self._json(dict(part=SM.oneshot(state, req.get("n") or 1, set(req.get("avoid") or []),
                                                            path=req.get("path")), info=SM.info(state)))
@@ -754,7 +760,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"error": "a mining run is already going; stop it first"}, 409)
                 f = save_batch(plan)
                 args = ["--ids-file", str(f)] + (["--words"] if req.get("words", True) else []) \
-                    + (["--build"] if req.get("build", True) else [])
+                    + (["--build"] if req.get("build", True) else []) + (["--mashup"] if req.get("mashup") else [])
                 label = f"{plan['n']} songs · {plan['mode']} · {plan['artists']} artists"
                 return self._json({"job": start_job("process", args, label)})
             elif self.path == "/api/activity/pause":

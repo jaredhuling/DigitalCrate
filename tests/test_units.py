@@ -1214,3 +1214,30 @@ def test_a_part_can_be_spliced_from_pieces(tmp_path, monkeypatch):
     assert all(abs(m(b) / m(0) - 6 / 3) < 0.1 for b in (4, 5, 6))           # bar 6, three times
     # as a one-shot, and in the Live set, the same splice
     assert stems.shot_source("stem:1:vocals:2:3:1:0:0:0:2+1,10+0.5,5+1.5", None, 100) == out
+
+
+def test_mining_can_keep_a_songs_stems_for_mashup(tmp_path, monkeypatch):
+    """Mining with "also prepare for Mashup": the stems mining separated are kept as they are, with the bars and key it
+    found; nothing is decoded or separated a second time."""
+    import json
+    import soundfile as sf
+    from digitalcrate import audio, models, stems
+    monkeypatch.setattr(stems, "DIR", tmp_path / "stems")
+    stems._LIB.update(n=-1, lib={}); stems._EMB.clear()
+    monkeypatch.setattr(audio, "decode", lambda *a, **k: (_ for _ in ()).throw(AssertionError("decoded again")))
+    monkeypatch.setattr(models, "separate", lambda *a, **k: (_ for _ in ()).throw(AssertionError("separated again")))
+    monkeypatch.setattr(models, "clap", lambda: type("C", (), {"embed_audio": staticmethod(lambda xs: np.ones((len(xs), 512), np.float32))})())
+    monkeypatch.setattr(stems, "make_tops", lambda *a, **k: None)
+    monkeypatch.setattr(stems, "make_chords", lambda *a, **k: None)
+    bar, nb = 2.4, 20
+    t = np.arange(int(nb * bar * SR)) / SR
+    part = lambda hz: np.stack([0.2 * np.sin(2 * np.pi * hz * t)] * 2).astype(np.float32)
+    have = dict(tk=dict(bpm=100.0, pc=0, scale="major", camelot="8B", tempo_ok=True), bars=[b * bar for b in range(nb + 1)],
+                stems=dict(drums=part(100), bass=part(55), vocals=part(440), other=part(330)))
+    row = dict(id=7, path="/nowhere.flac", artist="A", title="T", policy="source", genre="")
+    m = stems.prepare_track(None, row, have=have)
+    assert m["track"] == 7 and m["bpm"] == 100 and len(m["bars"]) == nb + 1 and set(m["stems"]) == set(stems.STEMS)
+    assert sf.info(str(stems.DIR / "t7" / "bass.flac")).frames == len(t) and 7 in stems.library()
+    assert json.loads((stems.DIR / "t7" / "meta.json").read_text())["separated"] is True
+    # no steady 4/4: not prepared
+    assert stems.prepare_track(None, dict(row, id=8), have=dict(have, tk=dict(have["tk"], tempo_ok=False))) is None

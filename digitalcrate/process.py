@@ -126,7 +126,7 @@ def _cap(cands):
     return out
 
 
-def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs", pads_only=False):
+def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs", pads_only=False, mashup=False):
     """Mine one song. pads_only: an already-mined song, looked at again for pads only; its samples stay, new pads
     are added (unless they sound like one it already has)."""
     t0 = time.time()
@@ -147,6 +147,20 @@ def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs"
         if vocals != "demucs":
             stems["vocals"] = models.roformer_vocals(row["path"], y.shape[1], vocals)
         feats = {k: SourceFeat(v, hpss=k in ("vocals", "other")) for k, v in stems.items()}
+    if mashup and not pads_only:  # also keep the song's stems for Mashup, from the separation just made
+        try:
+            from . import stems as SM
+            if policy == "reference":
+                pass
+            elif int(row["id"]) in SM.library():
+                print("    Mashup: already prepared")
+            elif stems is None:
+                print("    Mashup: not prepared (the song wasn't separated: it has no drums to take out)")
+            else:
+                m = SM.prepare_track(con, row, have=dict(tk=tk, bars=bar_times, stems=stems))
+                print("    Mashup: " + ("its stems are kept" if m else "not prepared (no steady 4/4 to line up)"))
+        except Exception as e:
+            print("    Mashup: failed:", str(e)[:120])
     t_sep = time.time()
 
     cands, masks = find_candidates(tk, mix, feats, bar_times)
@@ -377,7 +391,7 @@ def duplicate_of(con, row):
 
 
 def run(where_sql="1=1", params=(), separate_mode="auto", limit=None, reprocess=False, verbose=True,
-        vocals="demucs", include_reference=False, order_by="artist, album, path"):
+        vocals="demucs", include_reference=False, order_by="artist, album, path", mashup=False):
     con = connect()
     status_clause = "" if reprocess else "AND status IN ('new','error')"
     if not include_reference:
@@ -410,7 +424,7 @@ def run(where_sql="1=1", params=(), separate_mode="auto", limit=None, reprocess=
                 continue
             tqdm.write(f"NOW {row['artist']} - {row['title']}")
             remove_track_files(con, row["id"])
-            total += process_track(con, row, separate_mode, verbose, vocals)
+            total += process_track(con, row, separate_mode, verbose, vocals, mashup=mashup)
         except KeyboardInterrupt:
             raise
         except Exception as e:
