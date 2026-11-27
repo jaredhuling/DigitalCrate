@@ -92,9 +92,11 @@ Hover over the song for the full name and why that part was picked.
   15 to 20 MB per song. Use `digitalcrate stems --tops-only` to prepare just those songs. Until then, Drums plays
   the whole kit. Old Drums parts get their Tops on a track directly below as soon as the song has them.
 - **The die** pulls another part that fits what's playing. Each track's next part is picked and rendered ahead of time,
-  and the mixer tries to avoid songs it is already using. **All** deals every unlocked track. **↶ ↷** go back and
+  and the mixer tries to avoid songs it is already using. It moves through the library: each track remembers the
+  songs it dealt lately (also after a reload) and leaves them out, and draws from the best-fitting quarter of the rest. **All** deals every unlocked track. **↶ ↷** go back and
   forward through its parts. **S** solos the track, **M** mutes it, and the volume slider resets to 0 dB on a double-click.
-- **⋯** opens the track's options. **Choose the song** uses its best-fitting bars. **Other takes** goes through other
+- **⋯** opens the track's options. **Choose the song** opens a search and uses the song's best-fitting bars (✕, **Esc** or a
+  click elsewhere closes it). **Other takes** goes through other
   stretches of the same song. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
   **＋ add slot** adds another track, up to eight. **Clear all** empties the mixer.
@@ -106,9 +108,11 @@ Hover over the song for the full name and why that part was picked.
 - **Zoom and pan.** Pinch or hold **⌘** or **Ctrl** while scrolling to zoom around the pointer, down to two bars.
   Swipe sideways or drag the gray to pan. Hover over a waveform for **Loop** and **Whole song**. **Loops** and
   **Whole song** at the top change the view across the mixer. The white line follows playback.
-- **Pitch** takes semitones and cents, including on drums. Drag either number up or down, hold **Shift** for a finer
-  drag, or focus it and press **↑ ↓**. Double-click to reset. The pitch changes when you let go.
-- **Effects** follow as you drag. **EQ** has lo, mid and hi bands at 200 Hz, 1 kHz and 5 kHz. **Delay** has time in
+- **Pitch** takes semitones and cents, including on drums. Drag either number up or to the right for more, hold **Shift** for
+  a drag five times finer, click it to type a value, or focus it and press **↑ ↓**. Double-click to reset. The line
+  under a number shows where it sits in its range. The pitch changes when you let go. A track's semitones move that
+  track against the key; they don't change the mashup's key or the other tracks.
+- **Effects** are the same kind of numbers and follow as you drag. **EQ** has lo, mid and hi bands at 200 Hz, 1 kHz and 5 kHz. **Delay** has time in
   notes, feedback and amount. **Reverb** sends to the mixer's room, plate or hall, with the type and decay at the top.
   The dots on EQ, Delay and Reverb turn them on or off and keep their settings. **FX** switches those effects and
   harmonics together.
@@ -139,7 +143,8 @@ Hover over the song for the full name and why that part was picked.
   an edge to adjust it, or double-click for the whole sample. **Shape** opens a full-width waveform with a time
   axis and exact trim times. Hold **Shift** while dragging for finer control. The start and end buttons nudge by
   5 ms, or 1 ms with **Shift**. Use **fade in** and **fade out** to shape hits, and **warp** to fit the piece
-  to ¼, ½, 1 or 2 bars at the mixer tempo while keeping its pitch. The **Harmonics** switch adds overtones to
+  to ¼, ½, 1 or 2 bars at the mixer tempo while keeping its pitch, or to any length in beats (a 16th note is
+  0.25; type anything finer). The **Harmonics** switch adds overtones to
   low one-shots.
 - **⇩ Ableton** writes the mashup as a Live set, dry: a track per slot, each part a looping clip at the tempo; with
   snapshots, they are laid end to end (4, 8 or 16 bars each) with a marker each. A snapshot's own level becomes the

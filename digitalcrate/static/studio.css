@@ -94,7 +94,7 @@ svg.wave .phs{fill:var(--acc);opacity:.18}svg.wave .phl{fill:var(--acc);opacity:
 .mxname{width:84px;font-weight:600;text-transform:capitalize}.mxsrc{flex:1;min-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.35}
 .mxwave{position:relative;flex:1.2;min-width:160px;height:34px;background:#0e1013;border-radius:6px;overflow:hidden}.mxwave canvas{width:100%;height:34px;display:block;opacity:.85}
 .mxwave i{position:absolute;top:0;bottom:0;width:2px;background:#fff;left:0;pointer-events:none;display:none}
-.mxfind{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-4px 0 8px 92px;padding:8px;border:1px solid var(--line);border-radius:10px}.mxfind input{width:240px}
+.mxfind{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:-4px 0 8px 92px;padding:8px;border:1px solid var(--line);border-radius:10px}.mxfind input{width:240px}.mxfind .mxfindx{order:-1}.mxwarpn{width:64px}
 .mxsave{margin-top:-4px}
 /* sliders, everywhere: the thumb sits flush at either end, and the fill starts at the minimum (or at zero when the
    range runs below and above it), so a control that is all the way down looks off. --a / --b: the fill's ends (0..1),
@@ -148,6 +148,8 @@ body.mash .projbar{display:none}
 .mxtrim{width:170px;height:26px;display:block;background:#0e1013;border-radius:5px;cursor:ew-resize}
 .trnum{display:inline-flex;align-items:center;gap:4px;padding:2px 5px;border:1px solid var(--line);border-radius:4px;background:#0e1013;color:var(--mute);font-size:11px;white-space:nowrap;cursor:ns-resize;touch-action:none;user-select:none}
 .trnum output{font:11px ui-monospace,Menlo,monospace;color:var(--ink)}
+.trnum{position:relative;cursor:ew-resize}.trnum::after{content:"";position:absolute;left:var(--a,0);width:var(--w,0);bottom:0;height:2px;background:var(--trcol,var(--acc));opacity:.85;border-radius:1px;pointer-events:none}
+.trnum .trtype{width:44px;padding:0 2px;font:11px ui-monospace,Menlo,monospace;background:#000;color:var(--ink);border:1px solid var(--acc);border-radius:3px}
 .trnum:focus-visible{outline:1px solid var(--acc);outline-offset:1px}
 .trfx{grid-column:1/-1;display:flex;align-items:center;gap:5px;height:28px;min-width:0;color:var(--mute)}
 .trdev{display:flex;align-items:center;gap:3px;min-width:0;padding:2px 4px;border:1px solid var(--line);border-radius:5px;font-size:11px;white-space:nowrap}

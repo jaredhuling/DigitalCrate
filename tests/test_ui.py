@@ -1653,6 +1653,13 @@ def test_mashup_one_shot_slot(site, page):
     page.wait_for_function("id=>CRATE.MX.slots[id]._wkey?.endsWith('|4.8')", arg=sid)
     page.select_option(f'[data-mxwarp="{sid}"]', "0")
     page.wait_for_function(f"!CRATE.MX.slots['{sid}'].wbuf", timeout=20000)
+    # ... or to any length in beats (a 16th is 0.25; anything finer can be typed)
+    odd = round(fit * 1.1, 2)
+    page.fill(f'[data-mxwarpn="{sid}"]', str(odd)); page.dispatch_event(f'[data-mxwarpn="{sid}"]', "change")
+    page.wait_for_function(f"(p=>p.warp==={odd}&&p.wbuf&&Math.abs(p.wbuf.duration-{odd * beat})<0.01)(CRATE.MX.slots['{sid}'])", timeout=120000)
+    assert f"fit {odd:g} beats" in page.inner_text(f'[data-mxwarp="{sid}"]')
+    page.fill(f'[data-mxwarpn="{sid}"]', ""); page.dispatch_event(f'[data-mxwarpn="{sid}"]', "change")
+    page.wait_for_function(f"!CRATE.MX.slots['{sid}'].wbuf", timeout=20000)
     page.click(f'.mxtrimbar [data-mxtrimopen="{sid}"]')              # done
     assert page.locator(".mxtrimbox").count() == 0
     # ⧉ duplicate: the same sample, placement and settings in a new slot right below
@@ -1773,7 +1780,7 @@ def test_pitch_is_two_numbers_you_drag(site, page):
     _calls(page, block_prefetch=True)
     box = page.locator('[data-v="bass:ct"]').bounding_box()
     x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
-    page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x, y - 20); page.mouse.move(x, y - 40)
+    page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x, y - 20); page.mouse.move(x, y - 75)   # 3 px a cent
     assert page.evaluate("__calls.filter(c=>c[0]==='api/stems/render').length") == 0     # nothing is asked while dragging
     page.mouse.up()
     page.wait_for_function("""() => {
@@ -1820,10 +1827,30 @@ def test_effects_are_numbers_under_every_track(site, page):
     assert page.evaluate("CRATE.MX.slots.drums._c.fb.gain.value") == pytest.approx(0.35, abs=0.01)   # untouched: as it was fixed
     box = page.locator('[data-v="vocals:g0"]').bounding_box()
     x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
-    page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x, y - 40)
+    page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x, y - 30); page.mouse.move(x + 25, y - 30)   # up, then right: both mean more
     page.wait_for_function("CRATE.MX.slots.vocals._c.lo.gain.value>2")                 # heard while dragging
     page.mouse.up()
-    assert page.evaluate("CRATE.MX.slots.vocals.eq[0]") == 6                            # 40 px of 160 for 24 dB
+    assert page.evaluate("CRATE.MX.slots.vocals.eq[0]") == 6                            # 55 px of 220 for 24 dB
+    # a line under the number shows where it sits (from the middle for a ± value)
+    assert page.evaluate("(()=>{const e=document.querySelector('[data-v=\"vocals:g0\"]');return [e.style.getPropertyValue('--a'),e.style.getPropertyValue('--w')]})()") == ["50.0%", "25.0%"]
+    # ⇧ makes a drag five times finer
+    box = page.locator('[data-v="other:rev"]').bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.keyboard.down("Shift"); page.mouse.move(x, y); page.mouse.down(); page.mouse.move(x + 20, y); page.mouse.move(x + 60, y); page.mouse.up(); page.keyboard.up("Shift")
+    assert page.evaluate("Math.round(CRATE.MX.slots.other.rev*100)") == 4              # 60 px of 1500 for 100 %
+    # a click lets you type the value; Enter sets it (inside its range), Esc leaves it
+    page.click('[data-v="other:rev"]')
+    page.wait_for_selector('[data-v="other:rev"] input.trtype')
+    page.keyboard.type("37"); page.keyboard.press("Enter")
+    page.wait_for_function("Math.round(CRATE.MX.slots.other.rev*100)===37")
+    page.click('[data-v="other:rev"]')
+    page.wait_for_selector('[data-v="other:rev"] input.trtype')
+    page.keyboard.type("90"); page.keyboard.press("Escape")
+    assert page.evaluate("Math.round(CRATE.MX.slots.other.rev*100)") == 37 and page.locator("input.trtype").count() == 0
+    page.dblclick('[data-v="other:rev"]')                                              # a double-click still resets
+    page.wait_for_function("(CRATE.MX.slots.other.rev||0)===0")
+    page.wait_for_timeout(400)
+    assert page.locator("input.trtype").count() == 0
     page.click('[data-mxrow="vocals"] [data-mxeqon]')
     page.wait_for_function("Math.abs(CRATE.MX.slots.vocals._c.lo.gain.value)<0.1")
     assert page.evaluate("CRATE.MX.slots.vocals.eq[0]") == 6 and page.locator('[data-mxrow="vocals"] .trdev[data-dev="eq"].mxoff').count() == 1
@@ -3481,3 +3508,22 @@ def test_the_die_stays_put_when_the_part_changes(site, page):
     _roll(page, "other", next(t for t in (901, 902, 903) if t != cur))
     assert json.loads(at()) == before
     assert page.evaluate("document.querySelector('[data-mxrow=\"vocals\"] .trsrc').getBoundingClientRect().left > document.querySelector('[data-mxrow=\"vocals\"] [data-mxroll]').getBoundingClientRect().right")
+
+
+def test_the_song_search_closes(site, page):
+    """Choose the song (under ⋯) opens a search; ✕, Esc from anywhere, or a click elsewhere puts it away again."""
+    _mixer(site, page)
+    def open_():
+        page.click('[data-mxrow="bass"] [data-trmore]'); page.click('[data-mxrow="bass"] .trmenu [data-mxfind]')
+        page.wait_for_selector(".mxfind #mxq")
+    open_(); page.click(".mxfind [data-mxfindx]")
+    assert page.locator(".mxfind").count() == 0
+    open_(); page.locator("#mxsave").focus(); page.keyboard.press("Escape")
+    assert page.locator(".mxfind").count() == 0
+    open_(); page.click('[data-mxrow="drums"] .trname')
+    page.wait_for_function("!document.querySelector('.mxfind')")
+    open_(); page.fill("#mxq", "a")                                 # typing in it and clicking a result still work
+    assert page.locator(".mxfind").count() == 1
+    track = page.evaluate("+document.querySelector('.mxfind [data-mxsong]').dataset.mxsong.split(':')[1]")
+    page.click(".mxfind [data-mxsong]")
+    page.wait_for_function(f"CRATE.MX.slots.bass.track==={track}&&!document.querySelector('.mxfind')", timeout=120000)

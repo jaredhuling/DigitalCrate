@@ -505,6 +505,16 @@ def test_stem_mixer_renders_fits_and_learns(tmp_path, monkeypatch):
     picks = [stems.pick("bass", state, rng=np.random.default_rng(k)) for k in range(12)]
     assert all(p["track"] != 1 for p in picks)             # not the song already playing
     assert sum(p["track"] == 3 for p in picks) <= 1        # the one that clashes loses
+    # a slot's own semitones move that slot against the key; they don't move the key (and so every other slot)
+    st2 = dict(bpm=100, key=None, slots=dict(other=dict(track=1, bar0=0, n=4, off=0), bass=dict(track=2, bar0=0, n=4, off=0)))
+    i0 = stems.info(st2)
+    st2["slots"]["other"]["off"] = 3
+    i1 = stems.info(st2)
+    assert i1["key"] == i0["key"] and i1["slots"]["bass"]["semis"] == i0["slots"]["bass"]["semis"]
+    assert i1["slots"]["other"]["semis"] == i0["slots"]["other"]["semis"] + 3
+    # the dice moves through the library: songs a slot dealt lately sit out (up to a quarter of what's on offer)
+    assert 5 in {stems.pick("bass", state, rng=np.random.default_rng(k))["track"] for k in range(6)}
+    assert 5 not in {stems.pick("bass", state, rng=np.random.default_rng(k), avoid=[5])["track"] for k in range(6)}
     # tempo: drums stretch well only within about -20% / +25%, at the song's tempo, half or double
     assert stems.best_k(lib[4], 100, "drums") is None and stems.best_k(lib[5], 100, "drums")[0] == 2
     drums = [stems.pick("drums", state, rng=np.random.default_rng(k)) for k in range(12)]

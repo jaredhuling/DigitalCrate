@@ -527,7 +527,9 @@ def _parts(state, lib=None):
 
 
 def target_key(state, skip=None):
-    """The mixer's key: the one you set, else the key of the first pitched slot playing (other, bass, vocals)."""
+    """The mixer's key: the one you set, else the key of the first pitched slot playing (other, bass, vocals): its
+    song's key, not counting the slot's own semitones (those move that slot against the key, they don't move the key:
+    counting them shifted the slot twice and dragged every other slot along)."""
     k = parse_key(state.get("key"))
     if k:
         return k
@@ -537,7 +539,7 @@ def target_key(state, skip=None):
         for sid, stem, p in parts:
             if stem == want and sid != skip:
                 m = lib[int(p["track"])]
-                return ((m["pc"] + int(p.get("off") or 0)) % 12, m["scale"])
+                return (m["pc"] % 12, m["scale"])
     return None
 
 
@@ -726,7 +728,12 @@ def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_temp
 def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
     """A part of this stem for a slot (slot: its id; the stem's name when left out): scored against what the other
     slots play, drawn from the best with some randomness. track: from this song (you chose it): its best-fitting
-    bars, whatever its tempo."""
+    bars, whatever its tempo.
+
+    Exploring: the draw is over songs, not parts (each song's best part), from the best-scoring quarter of them, with a
+    chance that falls off by rank more than by score (by score alone, five songs took two thirds of the deals out of 180). The
+    songs this slot dealt lately (avoid, up to a quarter of what's on offer) sit out, so a run of deals moves through
+    the library before any song comes back."""
     slot = slot or stem
     rng = rng or np.random.default_rng()
     lib, con = library(), _db()
@@ -740,6 +747,8 @@ def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
     else:
         # a part from a song that's already playing in another slot wouldn't be recombining: only if nothing else fits
         playing = {int(p["track"]) for sid, _, p in _parts(state, lib) if sid != slot}
+        offer = sum(stem in m["stems"] for m in lib.values())
+        avoid = [int(t) for t in avoid if t is not None][-max(2, offer // 4):]
         cands = _candidates(stem, state, lib, taste, target, w, n, set(avoid) | playing | {cur.get("track")}, slot=slot) \
             or _candidates(stem, state, lib, taste, target, w, n, {cur.get("track")}, slot=slot)
     if not cands:
@@ -749,9 +758,14 @@ def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
         k_ = 0
         top = cands
     else:
-        top = cands[:max(6, len(cands) // 8)]
-        s = np.array([c[0] for c in top])
-        p = np.exp((s - s.max()) / 0.35)
+        seen, songs = set(), []
+        for c in cands:  # each song's best part
+            if c[1] not in seen:
+                seen.add(c[1])
+                songs.append(c)
+        top = songs[:max(8, len(songs) // 4)]
+        sc_ = np.array([c[0] for c in top])  # by rank, so the draw is wide; by score too, so a clearly worse part stays rare
+        p = np.exp(-np.arange(len(top)) / max(2.0, len(top) / 2.5)) * np.exp((sc_ - sc_.max()) / 0.7)
         k_ = int(rng.choice(len(top), p=p / p.sum()))
     sc, tid, b, semis, x, k = top[k_]
     m = lib[tid]

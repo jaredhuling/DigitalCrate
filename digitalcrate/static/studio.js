@@ -2989,14 +2989,22 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   const paintNumber = (el, key, v) => {
     const text = TR.fmt(key, v);
     el.querySelector('output').textContent = text;
+    el.style.cssText = level(key, v);
     el.setAttribute('aria-valuenow', v);
     el.setAttribute('aria-valuetext', text);
     if (key === 'harm') el.closest('.trdev').classList.toggle('mxoff', H.MX.fx === false || v === 0);
   };
+  // where a value sits in its range, as a thin line under the number (from the middle for ± values)
+  const level = (key, v) => {
+    const spec = TR.P[key], f = clamp((v - spec.min) / (spec.max - spec.min), 0, 1) * 100;
+    if (spec.unit === 'note') return '';
+    const z = spec.min < 0 ? clamp(-spec.min / (spec.max - spec.min), 0, 1) * 100 : 0;
+    return `--a:${Math.min(z, f).toFixed(1)}%;--w:${Math.abs(f - z).toFixed(1)}%`;
+  };
   TR.num = (id, key, label) => {
     const p = H.part(id), spec = TR.P[key], v = spec.get(p, id), text = TR.fmt(key, v);
     const name = numberLabel[key] || label;
-    return `<span class="trnum" tabindex="0" role="spinbutton" aria-label="${name}" aria-valuemin="${spec.min}" aria-valuemax="${spec.max}" aria-valuenow="${v}" aria-valuetext="${text}" data-v="${id}:${key}" title="${name} · drag up or down, or use ↑ ↓ · double-click to reset">${label ? `<span>${label}</span>` : ''}<output>${text}</output></span>`;
+    return `<span class="trnum" tabindex="0" role="spinbutton" aria-label="${name}" aria-valuemin="${spec.min}" aria-valuemax="${spec.max}" aria-valuenow="${v}" aria-valuetext="${text}" data-v="${id}:${key}" style="${level(key, v)}" title="${name} · drag up or right for more (hold ⇧ for fine) · click to type a value · ↑ ↓ step · double-click to reset">${label ? `<span>${label}</span>` : ''}<output>${text}</output></span>`;
   };
   TR.refresh = (root = document) => {
     root.querySelectorAll('[data-v]').forEach(el => {
@@ -3030,25 +3038,53 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     menus(list);
     loopControls(list);
     viewControls(list);
-    let drag;
+    let drag, typeT;
     const number = e => e.target.closest('[data-v]');
+    // type a value into a number: Enter or leaving the field sets it, Esc leaves it as it was
+    const type = (id, key) => {
+      const el = list.querySelector(`[data-v="${CSS.escape(id + ':' + key)}"]`), p = H.part(id), spec = TR.P[key];
+      if (!el || !p || el.querySelector('input')) return;
+      const out = el.querySelector('output'), box = document.createElement('input');
+      box.type = 'text'; box.inputMode = 'decimal'; box.className = 'trtype'; box.value = String(spec.get(p, id));
+      box.setAttribute('aria-label', el.getAttribute('aria-label'));
+      out.hidden = true; el.appendChild(box); box.focus(); box.select();
+      let done = false;
+      const close = commit => {
+        if (done) return;
+        done = true;
+        const v = parseFloat(box.value.replace(',', '.').replace(/[^0-9.+-]/g, ''));
+        box.remove(); out.hidden = false;
+        if (commit && Number.isFinite(v) && H.part(id) === p) TR.set(id, key, v);
+      };
+      box.addEventListener('keydown', e => {
+        e.stopPropagation();
+        if (e.key === 'Enter') close(true);
+        else if (e.key === 'Escape') close(false);
+      });
+      box.addEventListener('blur', () => close(true));
+    };
+    TR.type = type;
     list.addEventListener('pointerdown', e => {
       const el = number(e);
-      if (!el || e.button !== 0) return;
+      if (!el || e.button !== 0 || e.target.closest('input')) return;
       const [id, key] = el.dataset.v.split(':'), spec = TR.P[key], p = H.part(id);
       if (!p || !spec) return;
       e.preventDefault();
       el.focus({ preventScroll: true });
       const v = spec.get(p, id);
-      drag = { el, id, key, spec, p, pointer: e.pointerId, y: e.clientY, raw: v, start: v, v, moved: false };
+      drag = { el, id, key, spec, p, pointer: e.pointerId, x: e.clientX, y: e.clientY, raw: v, start: v, v, moved: false, far: 0 };
     });
     window.addEventListener('pointermove', e => {
       if (!drag || e.pointerId !== drag.pointer) return;
-      const d = drag, dy = d.y - e.clientY;
-      d.y = e.clientY;
+      const d = drag, dy = (d.y - e.clientY) + (e.clientX - d.x);   // up or right: more
+      d.y = e.clientY; d.x = e.clientX;
       if (!dy) return;
+      d.far += Math.abs(dy);
+      if (d.far < 3) return;                                          // a click, not a drag
       d.moved = true;
-      d.raw = clamp(d.raw + dy * (d.spec.max - d.spec.min) / (e.shiftKey ? 640 : 160), d.spec.min, d.spec.max);
+      // the whole range takes 220 px (never finer than a step every 3 px); ⇧ is five times finer
+      const span = Math.max(220, 3 * (d.spec.max - d.spec.min) / d.spec.step) * (e.shiftKey ? 5 : 1);
+      d.raw = clamp(d.raw + dy * (d.spec.max - d.spec.min) / span, d.spec.min, d.spec.max);
       const v = stepped(d.spec, d.raw);
       if (d.v === v) return;
       d.v = v;
@@ -3063,7 +3099,11 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
       const d = drag;
       drag = null;
       if (e.type === 'pointerup' && d.moved && H.part(d.id) === d.p) TR.set(d.id, d.key, d.v);
-      else {
+      else if (e.type === 'pointerup' && !d.moved && d.spec.unit !== 'note') {
+        // a click: type the value (a moment later, so a double-click still resets)
+        clearTimeout(typeT);
+        typeT = setTimeout(() => type(d.id, d.key), 280);
+      } else {
         if (d.moved && d.spec.after === 'apply' && H.part(d.id) === d.p) {
           d.spec.put(d.p, d.id, d.start);
           H.apply(d.id);
@@ -3084,6 +3124,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     list.addEventListener('dblclick', e => {
       const el = number(e);
       if (!el) return;
+      clearTimeout(typeT);
       const [id, key] = el.dataset.v.split(':');
       TR.set(id, key, TR.P[key].def);
     });
@@ -3562,6 +3603,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  // slots have ids; MX.roles[id] is the stem a slot plays (several slots can play one stem); MX.slots[id] is its part
  const MX={bpm:PROJ.bpm||100,key:'',reverb:{type:'plate',decay:1.8},mast:{on:true,chain:null,built:0},glue:{on:true},slots:{},order:STEMS.slice(),roles:Object.fromEntries(STEMS.map(x=>[x,x])),on:false,t0:0,n:null,info:null,rated:0,recent:{},master:null};
  const role=id=>MX.roles[id]||id;
+ try{MX.recent=JSON.parse(localStorage.getItem('dcStemsRecent')||'{}')||{}}catch(e){MX.recent={}}
  function adopt(sv){const ids=sv.order&&sv.order.length?sv.order:[...new Set([...STEMS,...Object.keys(sv.slots||{})])];MX.order=ids;MX.roles=Object.fromEntries(ids.map(id=>[id,(sv.roles||{})[id]||((sv.slots||{})[id]||{}).stem||(STEMS.includes(id)?id:'other')]))}
  // undo: every saved change of the mixer is a step (a drag is one step); ⌘Z / ⌘⇧Z walk them
  const UN={u:[],r:[],cur:null,t:0,busy:false};
@@ -3929,7 +3971,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  async function prefetch(id){const p=MX.slots[id];if(isOS(id)||!p||p.track==null||p.lock)return;
   const stem=role(id),bpm=MX.bpm,sig=ctxSig(id),cur=MX.pre[id];if(cur&&cur.sig===sig)return;
   const tok=MX.pre[id]={sig,ready:false};
-  try{const r=await api('api/stems/pick',{stem,slot:id,state:state(),avoid:(MX.recent[id]||[]).slice(-8),n:p.n});if(!r.part||MX.pre[id]!==tok)return;
+  try{const r=await api('api/stems/pick',{stem,slot:id,state:state(),avoid:(MX.recent[id]||[]).slice(-60),n:p.n});if(!r.part||MX.pre[id]!==tok)return;
    const q=r.part,rr=await api('api/stems/render',{track:q.track,stem,bar0:q.bar0,n:q.n,k:q.k||1,bpm,semis:TR.semis(q.semis||0,q),cond:q.cond});
    if(rr.whole)q.kit=true;
    const buf=await decode(url(rr.url)),hc=await BLEND.harmMeasure(buf,'oct');
@@ -3938,12 +3980,12 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  async function roll(stem,quiet,track){const old=MX.slots[stem];if(old&&old.lock&&track==null)return;leaving(stem);
   const rec=MX.recent[stem]||(MX.recent[stem]=[]);
   const pre=track==null&&!isOS(stem)?MX.pre[stem]:null,hit=pre&&pre.ready&&pre.sig===ctxSig(stem)?pre:null;delete MX.pre[stem];
-  let r;try{r=hit?{part:hit.part}:isOS(stem)?await api('api/stems/oneshot',Object.assign({state:state(),n:old&&old.sample?old.n:1,avoid:rec.slice(-12)},track==null?{}:{path:track})):await api('api/stems/pick',{stem:role(stem),slot:stem,state:state(),avoid:rec.slice(-8),n:old?old.n:null,track:track==null?null:track})}catch(e){toast('mashup: '+e.message);return}
+  let r;try{r=hit?{part:hit.part}:isOS(stem)?await api('api/stems/oneshot',Object.assign({state:state(),n:old&&old.sample?old.n:1,avoid:rec.slice(-12)},track==null?{}:{path:track})):await api('api/stems/pick',{stem:role(stem),slot:stem,state:state(),avoid:rec.slice(-60),n:old?old.n:null,track:track==null?null:track})}catch(e){toast('mashup: '+e.message);return}
   if(!r.part){if(!quiet)toast(isOS(stem)?'no one-shot found: the library has no short samples that fit':`no ${role(stem)} part fits this tempo${PITCHED.has(role(stem))?' and key':''}: try another tempo, or prepare more songs`);return}
   if(has(old)&&!(MX.hist[stem]||[]).length)hpush(stem);  // what was there before the first roll can be gone back to as well
   stopSrc(stem);const keep=old?{db:old.db,mute:old.mute,solo:old.solo,eq:old.eq,dly:old.dly,dt:old.dt,fb:old.fb,eqOn:old.eqOn,dlyOn:old.dlyOn,rev:old.rev,revOn:old.revOn,_c:old._c,_v:old._v,_viewMode:old._viewMode,_preset:old._preset}  /* (harmonics follow the part: a new one decides again) */:{db:role(stem)==='vocals'?0:-2};
   if(isOS(stem)&&old&&old.sample&&track==null){r.part.n=old.n;r.part.every=old.every;if((old.steps||[]).length)r.part.steps=old.steps.slice()}  // 🎲 swaps the sound, your placement stays
-  MX.slots[stem]=Object.assign(keep,r.part,{hk:'oct',ct:0,since:performance.now(),buf:null,_key:null,_next:null});rec.push(isOS(stem)?r.part.sample:r.part.track);hpush(stem);
+  MX.slots[stem]=Object.assign(keep,r.part,{hk:'oct',ct:0,since:performance.now(),buf:null,_key:null,_next:null});rec.push(isOS(stem)?r.part.sample:r.part.track);if(rec.length>80)rec.splice(0,rec.length-80);try{localStorage.setItem('dcStemsRecent',JSON.stringify(MX.recent))}catch(e){}hpush(stem);
   if(hit){const p=MX.slots[stem];p.buf=hit.buf;p.sub=hit.sub;p._hc=hit.hc;initHarm(stem);p._key=renderKey(p,MX.bpm,TR.semis(p.semis||0,p));p._playingLoop={track:p.track,bar0:p.bar0,n:p.n,k:p.k};startSrc(stem);draw()}  // it's playing already; sync only confirms
   await sync()}
  async function rollAll(){const pr={drums:0,tops:1,other:2,bass:3,vocals:4,oneshot:5};  // 'other' before bass and vocals: it sets the key they fit to
@@ -3956,8 +3998,8 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(isOS(stem)){const q=(F.q||'').toLowerCase().trim(),lim=2*barLenM()+0.05,out=[];
    for(let i=0;i<S.length&&out.length<16;i++){const x=S[i];if(x[F_.dur]>lim||x[F_.parent]||GONE.has(i)||TASTE.disliked.has(x[F_.path]))continue;if(x[F_.kind]!=='oneshot'&&!(x[F_.cat]==='Vocals'||x[F_.cat]==='Vocal Atmospheres'))continue;
     if(q&&!(`${x[F_.artist]} ${x[F_.title]} ${x[F_.sub]} ${x[F_.cat]} ${x[F_.id]} ${(x[F_.tags]||[]).join(' ')} ${(typeof WORDS!=='undefined'&&WORDS[i])||''}`.toLowerCase().includes(q)))continue;out.push(i)}
-   return `<div class="mxfind"><input id="mxq" placeholder="search your library's one-shots, drum hits and short vocals (artist, title, words, mood…)" value="${esc(F.q||'')}" style="width:340px">${out.map(i=>`<button class="tbtn" data-mxospick="${stem}:${i}" title="${esc(S[i][F_.sub])} · ${S[i][F_.dur]} s${S[i][F_.cam]?' · '+S[i][F_.cam]:''}">${esc(S[i][F_.artist])} — ${esc(S[i][F_.title])} <span class="sub">${esc(S[i][F_.sub])} · ${S[i][F_.dur]}s</span></button>`).join('')||'<span class="sub">nothing short enough matches</span>'}</div>`}const q=(F.q||'').toLowerCase(),rows=(MX.songs||[]).filter(x=>x.stems.includes(role(stem))&&(!q||(x.artist+' '+x.title).toLowerCase().includes(q))).slice(0,14);
-  return `<div class="mxfind"><input id="mxq" placeholder="search the ${MX.songs?MX.songs.length:''} prepared songs…" value="${esc(F.q||'')}">${rows.map(x=>`<button class="tbtn" data-mxsong="${stem}:${x.track}" title="${x.bpm} bpm · ${x.key}">${esc(x.artist)} — ${esc(x.title)} <span class="sub">${Math.round(x.bpm)} · ${x.key}</span></button>`).join('')||'<span class="sub">no prepared song matches</span>'}</div>`}
+   return `<div class="mxfind"><button class="tbtn mxfindx" data-mxfindx="1" title="close the search (Esc)">✕</button><input id="mxq" placeholder="search your library's one-shots, drum hits and short vocals (artist, title, words, mood…)" value="${esc(F.q||'')}" style="width:340px">${out.map(i=>`<button class="tbtn" data-mxospick="${stem}:${i}" title="${esc(S[i][F_.sub])} · ${S[i][F_.dur]} s${S[i][F_.cam]?' · '+S[i][F_.cam]:''}">${esc(S[i][F_.artist])} — ${esc(S[i][F_.title])} <span class="sub">${esc(S[i][F_.sub])} · ${S[i][F_.dur]}s</span></button>`).join('')||'<span class="sub">nothing short enough matches</span>'}</div>`}const q=(F.q||'').toLowerCase(),rows=(MX.songs||[]).filter(x=>x.stems.includes(role(stem))&&(!q||(x.artist+' '+x.title).toLowerCase().includes(q))).slice(0,14);
+  return `<div class="mxfind"><button class="tbtn mxfindx" data-mxfindx="1" title="close the search (Esc)">✕</button><input id="mxq" placeholder="search the ${MX.songs?MX.songs.length:''} prepared songs…" value="${esc(F.q||'')}">${rows.map(x=>`<button class="tbtn" data-mxsong="${stem}:${x.track}" title="${x.bpm} bpm · ${x.key}">${esc(x.artist)} — ${esc(x.title)} <span class="sub">${Math.round(x.bpm)} · ${x.key}</span></button>`).join('')||'<span class="sub">no prepared song matches</span>'}</div>`}
   // the whole sample, small, with the piece that plays lit: drag across it to choose the piece, drag an edge to move it
  function osTrimDraw(stem,p){if(!p.buf)return;const [a,b]=osTrim(p),D=p.buf.duration,d=p.buf.getChannelData(0);
   document.querySelectorAll(`canvas[data-mxtrim="${stem}"]`).forEach(c=>{const dpr=devicePixelRatio||1,W=Math.round(c.clientWidth*dpr),H=Math.round(c.clientHeight*dpr);if(!W||!H)return;c.width=W;c.height=H;
@@ -3982,7 +4024,8 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    <div class="mxtrimbar"><span class="mxlab">fade in</span><input type="range" min="0" max="400" step="5" value="${p.fin||0}" data-mxfade="${stem}:fin" style="width:120px"><output>${p.fin||0} ms</output>
     <span class="mxlab" style="margin-left:10px">fade out</span><input type="range" min="0" max="2000" step="10" value="${p.fout||0}" data-mxfade="${stem}:fout" style="width:160px"><output>${p.fout||0} ms</output>
     <span class="mxlab" style="margin-left:16px" title="stretch the piece to an exact length at the mashup's tempo, keeping its pitch (your pitch offset then keeps the length too)">warp</span>
-    <select data-mxwarp="${stem}" title="stretch the piece to an exact length at the mashup's tempo, keeping its pitch">${[[0,'off: its own length'],[1,'fit ¼ bar'],[2,'fit ½ bar'],[4,'fit 1 bar'],[8,'fit 2 bars']].map(([v,l])=>`<option value="${v}" ${(p.warp||0)===v?'selected':''}>${l}</option>`).join('')}</select>
+    <select data-mxwarp="${stem}" title="stretch the piece to an exact length at the mashup's tempo, keeping its pitch">${[[0,'off: its own length'],[1,'fit ¼ bar'],[2,'fit ½ bar'],[4,'fit 1 bar'],[8,'fit 2 bars']].map(([v,l])=>`<option value="${v}" ${(p.warp||0)===v?'selected':''}>${l}</option>`).join('')}${p.warp&&![1,2,4,8].includes(p.warp)?`<option value="${p.warp}" selected>fit ${p.warp} beats</option>`:''}</select>
+    <span class="mxlab" title="any length, in beats: a 16th note is 0.25, a dotted 8th 0.75, a bar 4. Arrow keys step by a 16th; type for anything finer (1.1, 2.33…)">or</span><input type="number" class="mxwarpn" data-mxwarpn="${stem}" min="0.1" max="32" step="0.25" value="${p.warp||''}" placeholder="${p.buf?((osTrim(p)[1]-osTrim(p)[0])*p.buf.duration/(60/MX.bpm)).toFixed(2):''}" title="any length, in beats: a 16th note is 0.25, a dotted 8th 0.75, a bar 4. Arrow keys step by a 16th; type for anything finer (1.1, 2.33…)"><span class="mxlab">beats</span>
     <span class="sub">${p.warp&&p.wbuf?`stretched ${(p.wbuf.duration/((osTrim(p)[1]-osTrim(p)[0])*p.buf.duration)).toFixed(2)}× to ${p.wbuf.duration.toFixed(2)} s`:''}</span></div></div>`}
  function osWave(stem,p,box){const c=box.querySelector('canvas.mxosw');if(!c)return;const dpr=devicePixelRatio||1,W=Math.round(c.clientWidth*dpr),H=Math.round(c.clientHeight*dpr);c.width=W;c.height=H;
    const g=c.getContext('2d'),q=osPlay(p),d=q.buf.getChannelData(0),n=p.n||1,cyc=n*barLenM(),len=q.out,wpx=Math.max(3,len/cyc*W),i0=Math.floor(q.from/q.buf.duration*q.buf.length),step=q.len/q.buf.duration*q.buf.length/wpx;
@@ -4123,6 +4166,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    const k=(Math.max(0,A.findIndex(a=>a.bar0===p.bar0))+1)%A.length,nx=A[k];p.bar0=nx.bar0;p.k=nx.k||1;if(nx.why)p.why=nx.why;
    delete p._hkRequest;p.cond=nx.cond;p.alt=[k+1,A.length];delete p.legacyLoop;delete p._viewKey;p.ct=0;p.since=performance.now();p.harm=null;delete p.hup;hpush(id);await sync();return}
   if(ds.mxdel){const s=ds.mxdel;if(MX.slots[s]&&MX.slots[s].since&&(performance.now()-MX.slots[s].since)/1000<20)ev('remove',s);retire(s);delete MX.slots[s];await sync();return}
+  if(ds.mxfindx){MX.find=null;draw();return}
   if(ds.mxfind){if(MX.find&&MX.find.stem===ds.mxfind){MX.find=null;draw();return}MX.find={stem:ds.mxfind,q:''};await refreshSongs();draw();return}  // (songs still being prepared show up as they finish)
   if(ds.mxdup){const id=ds.mxdup,p=MX.slots[id];if(!has(p))return;if(MX.order.length>=8){toast('the mashup is full (8 slots)');return}
    const nid='s'+Date.now().toString(36),q={};Object.keys(p).forEach(k=>{if(k[0]!=='_')q[k]=Array.isArray(p[k])?p[k].slice():p[k]});  // everything but its audio chain; the decoded audio is shared
@@ -4207,6 +4251,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    await roll(id);if(MX.slots[id]&&MX.slots[id]._blank){retire(id);delete MX.slots[id];await sync()}return}
   if(t.id==='mxload'){const m=(MX.saved||[]).find(x=>x.name===t.value);if(!m)return;await openSaved(m);return}
   if(ds.mxwarp){const p=MX.slots[ds.mxwarp];p.warp=+t.value;p._next=null;await sync();return}
+  if(ds.mxwarpn){const p=MX.slots[ds.mxwarpn],v=+t.value;p.warp=v>0?Math.max(0.1,Math.min(32,Math.round(v*100)/100)):0;p._next=null;await sync();return}
   if(ds.mxfade){save();return}
   if(ds.mxevery){MX.slots[ds.mxevery].every=+t.value;save();draw();return}
   if(ds.mxlen&&isOS(ds.mxlen)){const p=MX.slots[ds.mxlen];p.n=+t.value;p.steps=(p.steps||[]).filter(k=>k<p.n*16);p.fit=null;p._next=null;save();draw();
@@ -4265,6 +4310,9 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(tag==='TEXTAREA'||t.isContentEditable||(tag==='INPUT'&&!['range','checkbox','button'].includes(t.type)))return;
   e.preventDefault();e.stopImmediatePropagation();if(!e.repeat)undoGo(e.shiftKey?1:-1)},true);
  window.CRATE.mxUndo=undoGo;save();
+ // an open search closes with Esc from anywhere, or a click outside it
+ window.addEventListener('keydown',e=>{if(st.tab==='M'&&e.key==='Escape'&&MX.find){MX.find=null;draw()}});
+ document.addEventListener('pointerdown',e=>{if(st.tab!=='M'||!MX.find||!e.target.closest)return;if(e.target.closest('.mxfind,.trmenu,[data-trmore],[data-mxfind]'))return;MX.find=null;setTimeout(draw,0)},true);
  // ⌘S on this tab saves the mashup (not the sketch)
  window.addEventListener('keydown',e=>{if(st.tab!=='M'||!(e.metaKey||e.ctrlKey)||e.key.toLowerCase()!=='s')return;e.preventDefault();e.stopImmediatePropagation();const b=$('mxsave');if(b&&!b.disabled)b.click()},true);
  // space starts and stops the mashup (the strip while it is open), whatever control has the focus: it presses the play
