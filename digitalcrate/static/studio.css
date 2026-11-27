@@ -112,7 +112,7 @@ input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:#2a2
 .snlab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--mute);font-weight:600}
 .snchip{display:inline-flex;gap:6px;align-items:center;padding:3px 9px 3px 4px;font-size:12px}
 .snchip b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:5px;background:var(--panel);border:1px solid var(--line);font:600 11px ui-monospace,Menlo,monospace}
-.snchip.on{background:none;color:var(--ink);border-color:var(--acc)}.snchip.on b{background:var(--acc);color:#000;border-color:var(--acc)}
+.snchip.loose{border-style:dashed;color:var(--ink)}.snchip.on{background:none;color:var(--ink);border-color:var(--acc)}.snchip.on b{background:var(--acc);color:#000;border-color:var(--acc)}
 .sndot{width:7px;height:7px;border-radius:50%;background:var(--c)}.snsep{color:var(--mute)}
 .snbar button:disabled,#pb button:disabled{opacity:.4;cursor:default}
 .tag.hot{color:var(--acc);border-color:var(--acc);margin:0}
@@ -167,7 +167,7 @@ body.mash .projbar{display:none}
 .trh{display:flex;height:30px;min-width:0;gap:8px;align-items:center;white-space:nowrap}
 .trh>*{flex:none}.trh .trsrc{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* new part, back and forward sit straight after the song's text; what is left of the row's width comes after them */
-.trh .trname{width:74px}.trh .trsrc{margin-right:auto}
+.trh .trname{width:74px}.trh .trrate .tbtn{min-width:20px;padding:1px 3px;font-size:11px;opacity:.75}.trh .trrate .tbtn.on{opacity:1;border-color:var(--acc)}.trh .trsrc{margin-right:auto}
 /* the die deals a new part: the loudest control in a track's header, and in the top bar */
 .die{display:block;transition:transform .15s ease-out}
 .trh .tbtn.trdie{min-width:26px;padding:1px 4px}

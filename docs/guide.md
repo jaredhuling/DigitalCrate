@@ -114,7 +114,10 @@ Hover over the song for the full name and why that part was picked.
   on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
   ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
-  **＋ add slot** adds another track, up to eight. Drag a track by its name to move it up or down. **Clear all** empties the mixer.
+  **＋ add slot** adds another track, up to eight. Drag a track by its name to move it up or down.
+- **Rating on a track:** a stem track has **+** and **−** (this part works here, or doesn't: they teach the
+  recommendations for that part alone); a one-shot track has **fav** and **no**, the library's favorite and
+  not-for-me for that sample. **Clear all** empties the mixer.
 - **Move the loop.** The waveform shows the whole stem, with the loop lit and the rest gray. Drag the right edge to
   change the length, the left edge to change the start while holding the end, or inside to move the loop. Click the
   gray to start the loop there. With the waveform focused, **← →** move it and **⇧← ⇧→** shorten or lengthen it.

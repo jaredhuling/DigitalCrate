@@ -3721,4 +3721,51 @@ def test_a_snapshot_keeps_the_work_done_on_it(site, page):
     page.click('[data-sn="1"]')
     page.wait_for_function("CRATE.MX.slots.bass.db===-4&&CRATE.MX.slots.bass.buf", timeout=120000)
     assert page.evaluate("CRATE.MX.snaps[1].slots.bass.db") == -4
+    # ⌘Z keeps you on the snapshot (it used to leave you on none, so later work was kept nowhere)
+    setdb(-7); page.wait_for_timeout(700); setdb(-8)
+    page.locator("#mxsave").focus(); page.keyboard.press("Meta+z")
+    page.wait_for_function("CRATE.MX.slots.bass.db===-7&&CRATE.MX.snapSel===1", timeout=30000)
+    # work that is on no snapshot isn't lost by going to one: it waits under "not in a snapshot"
+    page.evaluate("CRATE.MX.snapSel=null")
+    setdb(-11)
+    page.click('[data-sn="0"]')
+    page.wait_for_function("CRATE.MX.snapSel===0&&CRATE.MX.slots.drums.track===901&&CRATE.MX.slots.drums.buf", timeout=120000)
+    page.wait_for_selector("#snloose")
+    page.reload(); page.click("#tabM"); page.wait_for_selector("#snloose")            # it survives a reload
+    page.click("#snloose")
+    page.wait_for_function("CRATE.MX.snapSel===null&&CRATE.MX.slots.bass.db===-11&&CRATE.MX.slots.bass.buf&&!document.querySelector('#snloose')", timeout=120000)
+    # a saved mashup opens on the snapshot its mixer is: work done next is kept there
+    page.click('[data-sn="1"]')
+    page.wait_for_function("CRATE.MX.snapSel===1&&CRATE.MX.slots.bass.buf&&!CRATE.MX.slots.bass._loading", timeout=120000)
+    page.fill("#mxname", "kept"); page.click("#mxsave")
+    page.wait_for_function("!CRATE.MX._saving&&CRATE.MX.savedSig===CRATE.mxSig()", timeout=20000)
+    page.evaluate("CRATE.MX.snapSel=null")
+    page.select_option("#mxload", "kept")
+    page.wait_for_function("CRATE.MX.snapSel===1&&CRATE.MX.slots.bass.buf", timeout=120000)
     page.evaluate("CRATE.mxPlay(false);localStorage.removeItem('dcStems')")
+
+
+def test_tracks_are_rated_where_they_play(site, page):
+    """A one-shot track has ★ and ✕ (the library's favorite and not-for-me); a stem track has 👍 and 👎, which teach
+    Mashup's recommendations for that part."""
+    _mixer(site, page)
+    sent = []
+    page.route("**/api/stems/event", lambda r: (sent.append(json.loads(r.request.post_data)), r.fulfill(status=200, body='{"rated":1}')))
+    page.route("**/api/event", lambda r: (sent.append(json.loads(r.request.post_data)), r.fulfill(status=200, body="{}")))
+    page.click('[data-mxpart="bass:1"]')
+    page.wait_for_function("CRATE.MX.slots.bass.rated===1")
+    assert any(e.get("kind") == "like" and e.get("stem") == "bass" for e in sent)
+    page.click('[data-mxpart="bass:-1"]')
+    page.wait_for_function("CRATE.MX.slots.bass.rated===-1")
+    assert any(e.get("kind") == "dislike" and e.get("stem") == "bass" for e in sent)
+    sid = _one_shot(page)
+    path = page.evaluate(f"CRATE.MX.slots['{sid}'].sample")
+    page.click(f'[data-mxfav="{sid}"]')
+    page.wait_for_function(f"FAV.has({json.dumps(path)})&&document.querySelector('[data-mxfav=\"{sid}\"]').classList.contains('on')", timeout=10000)
+    page.click(f'[data-mxfav="{sid}"]')
+    page.wait_for_function(f"!FAV.has({json.dumps(path)})", timeout=10000)
+    page.click(f'[data-mxnope="{sid}"]')
+    page.wait_for_function(f"TASTE.disliked.has({json.dumps(path)})", timeout=10000)
+    page.click(f'[data-mxnope="{sid}"]')
+    page.wait_for_function(f"!TASTE.disliked.has({json.dumps(path)})", timeout=10000)
+    assert page.evaluate("document.documentElement.scrollWidth<=document.documentElement.clientWidth")   # nothing pushed off the side
