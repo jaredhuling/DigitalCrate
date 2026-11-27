@@ -2273,11 +2273,15 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     return [entry];
   });
   BL.changed = () => { const MX = H.MX, i = MX.snapSel; return i != null && !!MX.snaps[i] && BL.snapSig(BL.snapNow()) !== BL.snapSig(MX.snaps[i]); };
-  // edits change the mixer, not the snapshot it came from: say so, and point at ↻ (sliders don't redraw the strip)
+  // The snapshot you are on keeps your work: what you changed in the mixer is written into it when you move on (to
+  // another snapshot, the play strip, a save or an export). It used to be dropped unless ↻ was clicked first.
+  // Clicking the snapshot you are on again is how to throw the changes away (with an undo).
+  BL.keep = () => { const MX = H.MX, i = MX.snapSel; if (!BL.changed()) return false; MX.snaps[i] = BL.snapNow(); return true; };
+  // (sliders don't redraw the strip: the note follows them)
   BL.markSnap = () => { const b = document.getElementById('snrep'), n = document.getElementById('snnote'); if (!b) return;
     const d = BL.changed(), L = BL.LETTERS[H.MX.snapSel];
     b.classList.toggle('dirty', d); b.textContent = `↻ replace ${L}${d ? ' •' : ''}`;
-    if (n) n.textContent = d ? `the mixer has changed since ${L}: ↻ keeps the change in ${L}, 📸 makes it a new snapshot` : ''; };
+    if (n) n.textContent = d ? `changed since ${L}: kept in ${L} when you move on · 📸 makes it a new snapshot instead · click ${L} again to drop the changes` : ''; };
 
   BL.capture = async () => {
     const MX = H.MX;
@@ -2295,7 +2299,9 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
 
   // bring a snapshot back into the mixer, as opening a saved combination does
   BL.recall = async i => {
-    const MX = H.MX, s = MX.snaps[i]; if (!s) return;
+    const MX = H.MX; if (!MX.snaps[i]) return;
+    if (i !== MX.snapSel && BL.keep()) toast(`your changes are kept in snapshot ${BL.LETTERS[MX.snapSel]}`);
+    const s = MX.snaps[i];
     // what's in the mixer now is replaced: if it isn't kept in any snapshot, it would be gone, so it can be undone
     const before = BL.snapNow(), sigB = BL.snapSig(before),
       lost = before.order.some(id => (before.slots[id] || {}).track != null) && !MX.snaps.some(x => BL.snapSig(x) === sigB);
@@ -2863,7 +2869,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
       if (ds.sn != null) { BL.recall(+ds.sn); return; }
       if (t.id === 'snrep') { BL.replace(MX.snapSel); return; }
       if (t.id === 'sndel') { BL.remove(MX.snapSel); return; }
-      if (t.id === 'snplay') { PB.open(0); return; }
+      if (t.id === 'snplay') { if (BL.keep()) H.save(); PB.open(0); return; }
       if (t.id === 'pbback') { PB.close(); return; }
       if (t.id === 'pbplay') { if (PB.playing && PB.auto) PB.setAuto(false); PB.play(!PB.playing); H.draw(); return; }
       if (t.id === 'pbauto') { PB.setAuto(!PB.auto); return; }
@@ -3681,7 +3687,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  function undoNote(J){if(UN.busy)return;const o=JSON.parse(J);delete o.savedSig;delete o.snapsOf;delete o.name;const k=JSON.stringify(o);
   if(UN.cur===null){UN.cur=k;return}if(k===UN.cur)return;const now=performance.now();
   if(now-UN.t>600||!UN.u.length){UN.u.push(UN.cur);if(UN.u.length>100)UN.u.shift()}UN.t=now;UN.cur=k;UN.r=[]}
- const save=()=>{try{const J=JSON.stringify({v:5,bpm:MX.bpm,key:MX.key,name:MX.name||'',savedSig:MX.savedSig||null,snapsOf:MX.snapsOf||null,fx:MX.fx!==false,reverb:MX.reverb,master:{on:MX.mast.on},glue:{on:MX.glue.on},duck:MX.duck||{},snaps:MX.snaps||[],trans:MX.trans||[],order:MX.order,roles:MX.roles,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>{const p=MX.slots[s];
+ const save=()=>{try{const J=JSON.stringify({v:5,sel:MX.snapSel??undefined,bpm:MX.bpm,key:MX.key,name:MX.name||'',savedSig:MX.savedSig||null,snapsOf:MX.snapsOf||null,fx:MX.fx!==false,reverb:MX.reverb,master:{on:MX.mast.on},glue:{on:MX.glue.on},duck:MX.duck||{},snaps:MX.snaps||[],trans:MX.trans||[],order:MX.order,roles:MX.roles,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>{const p=MX.slots[s];
    return [s,{stem:role(s),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,bars:p.bars,why:p.why,artist:p.artist,title:p.title,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,semis:p.semis,steps:p.steps,every:p.every,trim:p.trim||null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,db:p.db||0,mute:!!p.mute,lock:!!p.lock,eq:p.eq||[0,0,0],dly:p.dly||0,dt:p.dt||'1/8',fb:p.fb??0.35,eqOn:p.eqOn!==false,dlyOn:p.dlyOn!==false,rev:p.rev||0,revOn:p.revOn!==false,harm:p.harm==null?null:BLEND.harmAmt(p),hup:p.hup||undefined,legacyLoop:p.legacyLoop||undefined,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined}]}))});localStorage.setItem('dcStems',J);undoNote(J)}catch(e){}};
  const sig=(v=5,legacyShape=false)=>JSON.stringify({bpm:MX.bpm,key:MX.key||'',fx:MX.fx!==false,reverb:[MX.reverb.type,MX.reverb.decay],duck:BLEND.duckSig(MX,v<4?['bass']:undefined,v>=5),...(MX.mast.on?{}:{master:{on:false}}),...(MX.glue.on?{}:{glue:{on:false}}),
   snaps:MX.snaps||[],trans:MX.trans||[],slots:MX.order.map(id=>{
@@ -3785,6 +3791,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    MX.snapsOf=sv.snapsOf||null;MX.fx=sv.fx!==false;
    if(sv.reverb)MX.reverb=sv.reverb;
    restore(sv);
+   if(sv.sel!=null&&MX.snaps[sv.sel])MX.snapSel=sv.sel;
   }
  }catch(e){}
  const dirty=()=>MX.savedSig?sig()!==MX.savedSig:MX.order.some(id=>has(MX.slots[id]));
@@ -4364,7 +4371,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    if(!id){if(MX.order.length>=8){toast(`every ${k} slot is locked and the mixer is full`);return}id='s'+Date.now().toString(36);MX.order.push(id);MX.roles[id]=k}
    await roll(id,false,+tid);if(!MX.on)play(true);return}
   if(ds.mxsong){const [s,tid]=ds.mxsong.split(':');MX.find=null;await roll(s,false,+tid);if(!MX.on)play(true);return}
-  if(t.id==='mxsave'||t.id==='mxkeepsn'||t.id==='mxdropsn'){const name=($('mxname').value||'').trim()||MX.name||`Mix ${new Date().toLocaleString()}`;
+  if(t.id==='mxsave'||t.id==='mxkeepsn'||t.id==='mxdropsn'){BLEND.keep();const name=($('mxname').value||'').trim()||MX.name||`Mix ${new Date().toLocaleString()}`;
    if(MX._saving)return;
    // a strip that came with another saved combination doesn't silently become part of this one
    if(t.id==='mxsave'&&(MX.snaps||[]).length&&MX.snapsOf&&MX.snapsOf!==name){MX.ask=name;draw();return}
@@ -4379,7 +4386,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    finally{MX._saving=false;draw()}
    return}
   if(t.id==='mxaskno'){MX.ask=null;draw();return}
-  if(t.id==='mxexport'){const now=BLEND.snapNow(),L8='ABCDEFGH',secs=(MX.snaps||[]).length?MX.snaps.map((sn,k)=>({label:L8[k],order:sn.order,roles:sn.roles,slots:sn.slots})):[{label:MX.name||'Mashup',order:now.order,roles:now.roles,slots:now.slots}];
+  if(t.id==='mxexport'){BLEND.keep();const now=BLEND.snapNow(),L8='ABCDEFGH',secs=(MX.snaps||[]).length?MX.snaps.map((sn,k)=>({label:L8[k],order:sn.order,roles:sn.roles,slots:sn.slots})):[{label:MX.name||'Mashup',order:now.order,roles:now.roles,slots:now.slots}];
    const name=(MX.name||'').trim()||`Mashup ${new Date().toISOString().slice(0,10)}`;t.disabled=true;t.textContent='exporting…';
    try{const r=await api('api/stems/export',{name,bpm:MX.bpm,key:MX.key||(MX.info&&MX.info.key)||null,sections:secs,bars:MX.exBars||8});
     toast(`Live set → Mashups/${name}/${r.als} · ${r.tracks} tracks, ${r.sections} section${r.sections>1?'s':''} of ${r.bars} bars, dry`)}catch(err){toast('export failed: '+err.message)}draw();return}

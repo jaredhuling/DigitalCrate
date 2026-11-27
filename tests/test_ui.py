@@ -1381,7 +1381,7 @@ def test_playback_arrows_walk_the_strip(site, page):
     """Fully on the right snapshot, ▶ moves the view on: B to the left without a gap in its sound, C on the right.
     ◀ goes back. A part whose song is no longer prepared shows as missing and the rest plays on."""
     _strip(site, page, three=True)
-    page.evaluate("CRATE.MX.snaps[2].slots.vocals.track=999999")
+    page.evaluate("CRATE.MX.snapSel=null;CRATE.MX.snaps[2].slots.vocals.track=999999")   # (not on a snapshot: nothing of the mixer is written into one)
     page.click("#snplay")
     page.wait_for_function("CRATE.PB.on&&CRATE.PB.ready&&CRATE.PB.playing&&CRATE.PB.nextReady", timeout=90000)
     assert page.is_disabled("#pbnext") and page.is_disabled("#pbprev")
@@ -1492,7 +1492,7 @@ def test_snapshot_says_when_the_mixer_has_moved_on(site, page):
     sid = page.evaluate("CRATE.MX.order.find(id=>CRATE.MX.slots[id]&&CRATE.MX.slots[id].buf)")
     page.click(f'[data-mxmute="{sid}"]')
     page.wait_for_function("document.querySelector('#snrep').classList.contains('dirty')", timeout=5000)
-    assert "has changed since A" in page.inner_text("#snnote")
+    assert "changed since A: kept in A when you move on" in page.inner_text("#snnote")
     assert page.evaluate(f"CRATE.MX.snaps[0].slots['{sid}'].mute") is False      # the snapshot itself is untouched
     page.click("#snrep")
     page.wait_for_function("!document.querySelector('#snrep').classList.contains('dirty')", timeout=5000)
@@ -2341,7 +2341,8 @@ def test_old_drums_parts_in_a_full_mixer(site, page):
     page.wait_for_function("JSON.parse(localStorage.getItem('dcStems')).slots['drums~tops']", timeout=60000)
     page.evaluate("""(()=>{const s=JSON.parse(localStorage.getItem('dcStems'));s.v=2;s.order=s.order.filter(id=>id!=='drums~tops');delete s.slots['drums~tops'];
       for(let k=0;k<4;k++){const id='x'+k;s.order.push(id);s.roles[id]='drums';s.slots[id]={...s.slots.drums,stem:'drums'}}
-      s.snaps=[];localStorage.setItem('dcStems',JSON.stringify(s))})()""")
+      s.snaps=[];delete s.sel;localStorage.setItem('dcStems',JSON.stringify(s));
+      Storage.prototype.setItem=()=>{}})()""")   # (the page being left mustn't autosave over it: a render may still be finishing)
     page.reload()
     page.wait_for_function("typeof st!=='undefined'&&st.tab==='M'&&CRATE.MX.order.length===13", timeout=60000)   # 8 tracks, 5 of them old Drums
     assert page.locator("#mxadd").count() == 0
@@ -3690,3 +3691,34 @@ def test_pieces_stretch_repeat_rest_and_are_dragged(site, page):
     assert new.index("bass") < new.index("drums") and sorted(new) == sorted(order)
     assert page.evaluate("[...document.querySelectorAll('[data-mxrow]')].map(r=>r.dataset.mxrow)")[:len(new)] == new
     assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).order") == new
+
+
+def test_a_snapshot_keeps_the_work_done_on_it(site, page):
+    """Work on B, go to A, come back: B has what you did (it used to be dropped unless ↻ was clicked first). Clicking
+    the snapshot you are on drops the changes instead; a save keeps them too; and the place survives a reload."""
+    _strip(site, page)
+    assert page.evaluate("CRATE.MX.snapSel") == 1                                    # on B
+    setdb = lambda v: page.evaluate(f"(()=>{{const e=document.querySelector('[data-mxdb=\"bass\"]');e.value={v};e.dispatchEvent(new Event('input',{{bubbles:true}}));e.dispatchEvent(new Event('change',{{bubbles:true}}))}})()")
+    setdb(-9)
+    _roll(page, "vocals", 903)
+    assert page.evaluate("CRATE.MX.snaps[1].slots.bass.db") != -9                    # not yet: only when you move on
+    page.click('[data-sn="0"]')
+    page.wait_for_function("CRATE.MX.snapSel===0&&CRATE.MX.slots.drums.track===901&&CRATE.MX.slots.drums.buf", timeout=120000)
+    assert page.evaluate("[CRATE.MX.snaps[1].slots.bass.db,CRATE.MX.snaps[1].slots.vocals.track]") == [-9, 903]
+    assert "kept in snapshot B" in page.inner_text("#toast") and page.locator("#snundo").count() == 0
+    page.click('[data-sn="1"]')
+    page.wait_for_function("CRATE.MX.snapSel===1&&CRATE.MX.slots.vocals.track===903&&CRATE.MX.slots.vocals.buf&&CRATE.MX.slots.bass.db===-9", timeout=120000)
+    # a save keeps the work in the snapshot you are on as well
+    setdb(-4)
+    page.fill("#mxname", "kept"); page.click("#mxsave")
+    page.wait_for_function("!CRATE.MX._saving&&CRATE.MX.savedSig===CRATE.mxSig()", timeout=20000)
+    assert page.evaluate("CRATE.MX.snaps[1].slots.bass.db") == -4
+    # after a reload you are still on B, so what you do next is kept in it too
+    setdb(-6)
+    page.reload(); page.click("#tabM"); page.wait_for_selector("#snbar")
+    assert page.evaluate("[CRATE.MX.snapSel,CRATE.MX.slots.bass.db,CRATE.MX.snaps[1].slots.bass.db]") == [1, -6, -4]
+    # clicking the snapshot you are on drops the changes
+    page.click('[data-sn="1"]')
+    page.wait_for_function("CRATE.MX.slots.bass.db===-4&&CRATE.MX.slots.bass.buf", timeout=120000)
+    assert page.evaluate("CRATE.MX.snaps[1].slots.bass.db") == -4
+    page.evaluate("CRATE.mxPlay(false);localStorage.removeItem('dcStems')")
