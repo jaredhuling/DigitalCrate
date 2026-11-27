@@ -439,9 +439,24 @@ def tame(ref: np.ndarray) -> np.ndarray:
     return uniform_filter1d(minimum_filter1d(gain, w, mode="wrap"), w, mode="wrap").astype(np.float32)
 
 
-def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops=None, cond=0):
+def clean_cut(cut, nb):
+    """A splice as [(first bar, bars), ...] of the song, in half bars, inside the song; () if there is none."""
+    out = []
+    for piece in cut or ():
+        b, ln = round(float(piece[0]) * 2) / 2, max(0.5, round(float(piece[1]) * 2) / 2)
+        b = max(0.0, min(b, nb - 0.5))
+        ln = min(ln, nb - b)
+        if ln >= 0.5:
+            out.append((b, ln))
+    return tuple(out)
+
+
+def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops=None, cond=0, cut=None):
     """n mixer bars of a stem from the song's bar bar0 (n * k of its bars), as a WAV exactly n bars long at bpm,
-    shifted by semis. Legacy saves retain the source span they played before track editing. -> path"""
+    shifted by semis. Legacy saves retain the source span they played before track editing. -> path
+
+    cut: a splice, [[first bar, bars], ...] of the song (half bars allowed): those pieces one after the other instead
+    of the one stretch from bar0; as long as they add up to at the tempo (their bars / k mixer bars)."""
     import soundfile as sf
     from .stretch import signalsmith
     track, requested = int(track), int(bar0)
@@ -459,11 +474,18 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
     old_ns = min(max(1, round(n * k)), max(1, nb - 1))
     ns = old_ns if legacy else min(src_bars(n, k), nb)
     bar0 = max(0, min(requested, nb - ns))
+    cut = clean_cut(cut, nb)
+    if cut:
+        legacy = False
 
     def cached(start, pitch, version):
         key = f"{track}|{stem}|{start}|{n}|{k}|{float(bpm):.2f}|{pitch}|{version}"
+        if cut:  # the pieces say it all (not the stretch they replace)
+            key = f"{track}|{stem}|cut|{k}|{float(bpm):.2f}|{pitch}|{version}"
         if cond:
             key += f"|c{cond}"
+        if cut:
+            key += "|x" + ",".join(f"{b:g}+{ln:g}" for b, ln in cut)
         return CACHE / f"{hashlib.sha1(key.encode()).hexdigest()[:16]}.wav"
 
     old_geometry = legacy and ns != min(src_bars(n, k), nb)
@@ -480,16 +502,28 @@ def render(track, stem, bar0, n, bpm, semis=0.0, k=1, *, legacy=False, with_tops
         old = cached(bar0, f"{semis:.2f}", ("v5" if split else "v4") + suffix)
         if old.is_file():
             return old
-    if not (split or cond) and (legacy or (ns == old_ns and not source.exists())) and semis.is_integer() and (stem != "drums" or semis == 0):
+    if not (split or cond or cut) and (legacy or (ns == old_ns and not source.exists())) and semis.is_integer() and (stem != "drums" or semis == 0):
         old = cached(bar0, int(semis), "v3")
         if old.is_file():
             return old
     CACHE.mkdir(parents=True, exist_ok=True)
     a, b = int(bt[bar0] * C.SR), int(bt[bar0 + ns] * C.SR)
-    N = int(round(n * 240.0 / float(bpm) * C.SR))
+    N = int(round((sum(ln for _, ln in cut) / k if cut else n) * 240.0 / float(bpm) * C.SR))
+    at = lambda x: int(np.interp(x, np.arange(len(bt)), bt) * C.SR)  # a half bar: halfway between its bar lines
 
     def read(path):
-        return sf.read(str(path), start=a, frames=b - a, dtype="float32", always_2d=True)[0].T
+        if not cut:
+            return sf.read(str(path), start=a, frames=b - a, dtype="float32", always_2d=True)[0].T
+        pieces = []
+        for b0, ln in cut:
+            y = sf.read(str(path), start=at(b0), frames=at(b0 + ln) - at(b0), dtype="float32", always_2d=True)[0].T
+            f = min(int(0.002 * C.SR), y.shape[1] // 2)  # 2 ms in and out of every piece: a join never clicks
+            if f:
+                ramp = np.linspace(0, 1, f, dtype=np.float32)
+                y[:, :f] *= ramp
+                y[:, -f:] *= ramp[::-1]
+            pieces.append(y)
+        return np.concatenate(pieces, axis=1)
 
     def fit_length(y):
         ratio = N / max(1, y.shape[1])
@@ -1023,9 +1057,10 @@ def shot_source(sample, key, bpm):
     ("stem:<track>:<stem>:<bar0>:<n>:<k>:<semis>:<cond>:<legacy>"), that part rendered at the tempo (its shift is the
     one it had when it was turned). -> path"""
     if str(sample).startswith("stem:"):
-        _, track, stem, bar0, n, k, semis, cond, legacy = str(sample).split(":")
+        _, track, stem, bar0, n, k, semis, cond, legacy, *more = str(sample).split(":")
+        cut = [[float(v) for v in piece.split("+")] for piece in more[0].split(",")] if more and more[0] else None
         return render(int(track), stem, int(bar0), int(n), float(bpm), float(semis), float(k), legacy=legacy == "1",
-                      cond=int(cond or 0))
+                      cond=int(cond or 0), cut=cut)
     from .conform import render as conform
     return conform(sample, key=key or None)[0]
 
@@ -1154,17 +1189,18 @@ def export(name, bpm, key, sections, bars=8, reveal=True):
                 semis = (inf.get(sid) or {}).get("semis", 0) + float(p.get("ct") or 0) / 100
                 legacy = bool(p.get("legacyLoop"))
                 cond = int(p.get("cond") or 0) if role == "bass" else 0
-                src = render(p["track"], role, p["bar0"], n, bpm, semis, k, legacy=legacy, cond=cond)
+                cut = clean_cut(p.get("cut"), len(m["bars"]) - 1)
+                src = render(p["track"], role, p["bar0"], n, bpm, semis, k, legacy=legacy, cond=cond, cut=cut)
                 b0 = int(p["bar0"])
                 variant = (" legacy" if legacy else "") + (f" even{cond}" if cond else "")
-                if role == "bass":
+                if role == "bass" or cut:
                     variant += f" {src.stem}"
                 f = dest / "Parts" / (_safe(f"{role.capitalize()} - {m['artist']} - {m['title']}")[:64]
                                       + f" b{b0 + 1}-{b0 + src_bars(n, k)} {semis:+g}st{variant}.wav")
                 if not f.exists():
                     shutil.copy2(src, f)
-                beats = n * 4
-                label = f"{m['artist']} — {m['title']} · bars {b0 + 1}–{b0 + src_bars(n, k)}"
+                beats = (sum(ln for _, ln in cut) / k if cut else n) * 4
+                label = f"{m['artist']} — {m['title']} · " + (f"{len(cut)} pieces" if cut else f"bars {b0 + 1}–{b0 + src_bars(n, k)}")
             else:
                 continue
             db = float(p.get("db") or 0)
@@ -1207,8 +1243,32 @@ def save_mix(name, state):
     con.commit()
 
 
+def as_saved(state):
+    """A saved combination opens sounding as it was saved. Each part carries the semitones it was shifted by when
+    saved; if the mixer would shift it differently now (a song's keys were worked out since: songkeys), the part's own
+    offset takes up the difference. So a part you had tuned by hand against a wrong key isn't corrected twice.
+    Snapshots too. -> the state (changed in place)."""
+    lib = library()
+    for mix in [state, *(state.get("snaps") or [])]:
+        slots = {i: p for i, p in (mix.get("slots") or {}).items()
+                 if p and p.get("track") is not None and int(p["track"]) in lib}
+        if not slots:
+            continue
+        try:
+            now = info(dict(bpm=state.get("bpm") or 100, key=state.get("key") or None, slots=slots))["slots"]
+        except Exception:
+            continue
+        for i, p in slots.items():
+            if p.get("semis") is None or i not in now or _role(i, p) in DRUM_ROLES:
+                continue
+            d = int(round(float(p["semis"]) - float(now[i]["semis"])))
+            if d:
+                p["off"] = int(p.get("off") or 0) + d
+    return state
+
+
 def mixes():
-    return [dict(name=r["name"], state=json.loads(r["state"]), updated_at=r["updated_at"])
+    return [dict(name=r["name"], state=as_saved(json.loads(r["state"])), updated_at=r["updated_at"])
             for r in _mixes(_db()).execute("SELECT * FROM stem_mixes ORDER BY updated_at DESC")]
 
 

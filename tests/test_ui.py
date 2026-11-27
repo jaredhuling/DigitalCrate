@@ -1917,8 +1917,8 @@ def test_track_shows_the_whole_song(site, page):
     assert page.evaluate(PIXEL, ["other", outside, 1]) != rgb
     assert page.evaluate(PIXEL, ["other", (xa + xb) / 2, g["h"] / 2]) == rgb            # lit inside the loop
     assert page.evaluate(PIXEL, ["other", outside, g["h"] / 2]) == [0x39, 0x40, 0x4b]   # gray outside it
-    left = page.evaluate("parseFloat(document.querySelector('[data-mxwave=\"other\"] i').style.left)/100")
-    assert xa / g["w"] - 0.01 <= left <= xb / g["w"] + 0.01                             # the play line is inside the loop
+    page.wait_for_function("([lo,hi])=>{const l=parseFloat(document.querySelector('[data-mxwave=\"other\"] i').style.left)/100;return l>=lo&&l<=hi}",
+                           arg=[xa / g["w"] - 0.01, xb / g["w"] + 0.01], timeout=10000)   # the play line is inside the loop (a frame after the view changed)
     assert page.inner_text('[data-mxrow="other"] .trbars') == page.evaluate("CRATE.TR.barsText(CRATE.MX.slots.other)")
 
 def test_track_plays_without_its_picture(site, page):
@@ -3598,3 +3598,42 @@ def test_one_shot_plays_backwards_and_in_part(site, page):
     page.click(f'[data-mxback="{sid}"]')
     assert page.evaluate(f"CRATE.MX.slots['{sid}'].back") is True and "dirty" in page.get_attribute("#mxsave", "class")
     assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots['%s'].back" % sid) is True
+
+
+def test_a_part_is_spliced_from_pieces(site, page):
+    """⋯ → Splice pieces…: the part as pieces of its song, one after the other. Pieces are whole bars unless you ask
+    for halves; ⌥-click on the waveform adds the bar under the pointer; moving the loop makes it one stretch again."""
+    _mixer(site, page)
+    page.click('#trview [data-trview="song"]')
+    _calls(page)
+    bar = 240 / 100
+    page.click('[data-mxrow="vocals"] [data-trmore]'); page.click('[data-mxrow="vocals"] .trmenu [data-mxsplice]')
+    page.wait_for_selector('[data-mxsplicebox="vocals"]')
+    p0 = page.evaluate("(p=>({bar0:p.bar0,n:p.n}))(CRATE.MX.slots.vocals)")
+    assert page.locator('[data-mxsplicebox="vocals"] .mxpc').count() == 1          # it starts as the stretch it was
+    page.select_option('[data-mxpcl="vocals:0"]', "1")
+    page.wait_for_function(f"(p=>p.cut&&p.cut.length===1&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    page.click('[data-mxpcadd="vocals"]')
+    page.wait_for_function("CRATE.MX.slots.vocals.cut.length===2")
+    page.fill('[data-mxpcb="vocals:1"]', "12.5"); page.dispatch_event('[data-mxpcb="vocals:1"]', "change")   # the middle of bar 12
+    page.select_option('[data-mxpcl="vocals:1"]', "0.5")
+    page.wait_for_function(f"(p=>p.cut.length===2&&p.cut[1][0]===11.5&&p.cut[1][1]===0.5&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{1.5 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    sent = page.evaluate("__calls.filter(c=>c[0]==='api/stems/render'&&c[1].stem==='vocals'&&c[1].cut).pop()[1].cut")
+    assert sent == [[p0["bar0"], 1], [11.5, 0.5]]
+    assert "2 pieces" in page.inner_text('[data-mxrow="vocals"] .trbars') and "drift" in page.inner_text('[data-mxsplicebox="vocals"]')
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots.vocals.cut") == sent
+    # ⌥-click on the waveform: the bar under the pointer becomes the next piece
+    box = page.locator('[data-mxwave="vocals"]').bounding_box()
+    page.mouse.move(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2)
+    page.keyboard.down("Alt"); page.mouse.down(); page.mouse.up(); page.keyboard.up("Alt")
+    page.wait_for_function(f"(p=>p.cut.length===3&&p.cut[2][1]===1&&Number.isInteger(p.cut[2][0])&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{2.5 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    # a piece earlier, a piece out
+    third = page.evaluate("CRATE.MX.slots.vocals.cut[2][0]")
+    page.click('[data-mxpcup="vocals:2"]')
+    page.wait_for_function(f"CRATE.MX.slots.vocals.cut[1][0]==={third}")
+    page.click('[data-mxpcx="vocals:2"]')
+    page.wait_for_function(f"(p=>p.cut.length===2&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{2 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    # ↶ steps back through it; "one stretch again" drops the splice
+    page.click('[data-mxpcoff="vocals"]')
+    page.wait_for_function(f"(p=>!p.cut&&p.buf&&!p._loading&&Math.abs(p.buf.duration-{2 * bar})<0.02)(CRATE.MX.slots.vocals)", timeout=120000)
+    assert "piece" not in page.inner_text('[data-mxrow="vocals"] .trbars')

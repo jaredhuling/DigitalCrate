@@ -1119,6 +1119,13 @@ def test_parts_are_shifted_by_the_key_of_their_own_bars(tmp_path, monkeypatch):
     assert i["slots"]["bass"]["semis"] == 0 and i["slots"]["bass"]["key"] in ("C", "Am")
     state["slots"]["bass"]["bar0"] = 2
     assert stems.info(state)["slots"]["bass"]["semis"] == 4 and stems.info(state)["slots"]["bass"]["key"] == "Fm"
+    # a combination saved while the song had only its filed key (the bass there was shifted +4, by hand -1 more: +3)
+    # opens sounding the same: the part's own offset takes up the difference, in the mixer and in its snapshots
+    old = dict(stem="bass", track=2, bar0=16, n=4, off=-1, semis=3)
+    saved = stems.as_saved(dict(bpm=100, key="C", slots=dict(bass=dict(old)), snaps=[dict(slots=dict(bass=dict(old)))]))
+    assert saved["slots"]["bass"]["off"] == 3 and saved["snaps"][0]["slots"]["bass"]["off"] == 3
+    assert stems.info(dict(bpm=100, key="C", slots=saved["slots"]))["slots"]["bass"]["semis"] == 3
+    assert stems.as_saved(dict(bpm=100, key="C", slots=dict(bass=dict(old, bar0=2, semis=3))))["slots"]["bass"]["off"] == -1
     # a stem part turned into a one-shot plays that part, rendered at the tempo
     import soundfile as sf
     src = stems.shot_source("stem:1:other:4:2:1:0:0:0", "C", 120)
@@ -1149,3 +1156,29 @@ def test_one_shot_export_plays_backwards_and_in_part(tmp_path, monkeypatch):
     q = n // 4
     assert a[q] < a[3 * q] and b[q] > b[3 * q]                         # the other way round
     assert abs(c[q] - a[q]) < 1e-3 and abs(c[3 * q]) < 1e-4 and abs(a[3 * q]) > 0.5   # the first half only
+
+
+def test_a_part_can_be_spliced_from_pieces(tmp_path, monkeypatch):
+    """A part made of pieces of the song, one after the other (half bars allowed): as long as they add up to."""
+    import sqlite3
+    import soundfile as sf
+    from digitalcrate import stems
+    monkeypatch.setattr(stems, "DIR", tmp_path / "stems")
+    monkeypatch.setattr(stems, "CACHE", tmp_path / "stems" / "cache")
+    stems._LIB.update(n=-1, lib={}); stems._EMB.clear()
+    _fake_stem_song(tmp_path, 1, 100, 0, "major", 0)
+    f = stems.DIR / "t1" / "vocals.flac"                                   # each bar at its own level: bar b is 0.02 * (b + 1)
+    n = sf.info(str(f)).frames
+    bar = int(2.4 * SR)
+    y = np.concatenate([np.full(bar, 0.02 * (b + 1), np.float32) for b in range(24)])[:n]
+    sf.write(str(f), np.stack([y, y]).T, SR, format="FLAC", subtype="PCM_16")
+    assert stems.clean_cut([[2.2, 1], [30, 2], [5, 0.2], [23.5, 4]], 24) == ((2.0, 1.0), (23.5, 0.5), (5.0, 0.5), (23.5, 0.5))
+    out = stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 0.5], [5, 1.5]])
+    a, sr = sf.read(str(out), dtype="float32", always_2d=True)
+    assert len(a) == round(3 * 2.4 * SR)                                   # 3 bars in all
+    lv = lambda t: float(np.abs(a[int(t * SR), 0]))
+    one, two, three = lv(1.2), lv(2.4 + 0.6), lv(3.6 + 1.8)                # the middle of each piece
+    assert abs(two / one - 11 / 3) < 0.05 and abs(three / one - 6 / 3) < 0.05   # bar 3, then bar 11, then bar 6
+    assert out != stems.render(1, "vocals", 2, 4, 100, 0, 1) and out != stems.render(1, "vocals", 2, 4, 100, 0, 1, cut=[[2, 1], [10, 1]])
+    # as a one-shot, and in the Live set, the same splice
+    assert stems.shot_source("stem:1:vocals:2:3:1:0:0:0:2+1,10+0.5,5+1.5", None, 100) == out

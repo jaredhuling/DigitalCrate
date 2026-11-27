@@ -102,7 +102,11 @@ Hover over the song for the full name and why that part was picked.
   forward through its parts. **S** solos the track, **M** mutes it, and the volume slider resets to 0 dB on a double-click.
 - **⋯** opens the track's options. **Choose the song** opens a search and uses the song's best-fitting bars (✕, **Esc** or a
   click elsewhere closes it). **Other takes** goes through other
-  stretches of the same song. **Play it as a one-shot** turns the part into a one-shot track: the same audio, placed
+  stretches of the same song. **Splice pieces…** builds the part from pieces of its song played one after the other: set each
+  piece's bar and length (whole bars; ½ and 1½ are in the menu, and 12.5 as a bar means the middle of bar 12), add
+  one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), reorder with ◀, remove with ✕. The
+  waveform numbers the pieces in the order they play. Moving the loop, or **one stretch again**, drops the splice.
+  **Play it as a one-shot** turns the part into a one-shot track: the same audio, placed
   on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
   ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
