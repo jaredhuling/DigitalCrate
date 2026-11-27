@@ -1904,6 +1904,7 @@ PIXEL = """([slot,x,y])=>{const c=document.querySelector(`[data-mxwave="${slot}"
 
 def test_track_shows_the_whole_song(site, page):
     _mixer(site, page)
+    page.click('#trview [data-trview="song"]')
     page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.TR.has(s))", timeout=20000)
     g = page.evaluate("""(()=>{const p=CRATE.MX.slots.other,s=CRATE.TR.song(p.track,'other'),c=document.querySelector('[data-mxwave="other"] canvas');
       return {w:c.clientWidth,h:c.clientHeight,dur:s.dur,a:s.bars[p.bar0],b:s.bars[p.bar0+CRATE.TR.srcBars(p.n,p.k||1)],n:s.pk.length,rate:s.rate}})()""")
@@ -1957,6 +1958,7 @@ def _drag(page, x0, x1, y):
 
 def test_loop_drags_and_snaps(site, page):
     _mixer(site, page)
+    page.click('#trview [data-trview="song"]')
     page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.TR.has(s))", timeout=20000)
     page.evaluate("CRATE.TR.setLoop('drums',4,4)")
     page.wait_for_function("CRATE.MX.slots.drums.bar0===4&&CRATE.MX.slots.drums.n===4&&CRATE.MX.slots.drums.buf&&!CRATE.MX.slots.drums._loading")
@@ -3527,3 +3529,72 @@ def test_the_song_search_closes(site, page):
     track = page.evaluate("+document.querySelector('.mxfind [data-mxsong]').dataset.mxsong.split(':')[1]")
     page.click(".mxfind [data-mxsong]")
     page.wait_for_function(f"CRATE.MX.slots.bass.track==={track}&&!document.querySelector('.mxfind')", timeout=120000)
+
+
+def test_tracks_open_on_their_loops_and_remember_the_view(site, page):
+    """Loops is the view tracks open in; Whole song, once chosen, is kept: to the play strip and back, and after a
+    reload."""
+    _mixer(site, page)
+    page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.TR.has(s)&&CRATE.MX.slots[s]._viewMode)", timeout=20000)
+    modes = lambda: page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s]._viewMode)")
+    pressed = lambda: page.evaluate("[...document.querySelectorAll('#trview button')].filter(b=>b.getAttribute('aria-pressed')==='true').map(b=>b.dataset.trview)")
+    assert modes() == ["loop"] * 4 and pressed() == ["loop"]
+    page.click('#trview [data-trview="song"]')
+    page.wait_for_function("CRATE.MX.slots.drums._viewMode==='song'")
+    assert page.evaluate("localStorage.getItem('dcStemsView')") == "song"
+    page.reload(); page.click("#tabM"); page.wait_for_selector("#trview")
+    page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.TR.has(s)&&CRATE.MX.slots[s]._viewMode==='song')", timeout=120000)
+    assert pressed() == ["song"]
+
+
+def test_new_starts_a_fresh_mashup(site, page):
+    """＋ new: a clean slate with a first combination dealt; it asks first when there is unsaved work, in place."""
+    _mixer(site, page)
+    page.fill("#mxname", "keeper"); page.dispatch_event("#mxname", "input")
+    before = page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s].since)")
+    page.click("#mxnew")
+    assert page.inner_text("#mxnew") == "sure?" and page.evaluate("CRATE.MX.name") == "keeper"
+    page.click("#mxnew")
+    page.wait_for_function("CRATE.MX.name===''&&['drums','bass','vocals','other'].every(s=>CRATE.MX.slots[s]&&CRATE.MX.slots[s].buf)&&CRATE.MX.on", timeout=120000)
+    assert page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s].since)") != before
+    assert page.evaluate("CRATE.MX.snaps.length") == 0 and page.inner_text("#mxnew").strip() == "＋ new"
+
+
+def test_a_stem_part_becomes_a_one_shot(site, page):
+    """⋯ → Play it as a one-shot: the same audio, now placed on steps of a cycle (once, then a rest), with the track's
+    mix settings; ↶ brings the loop back."""
+    _mixer(site, page)
+    was = page.evaluate("(p=>({track:p.track,bar0:p.bar0,n:p.n,dur:p.buf.duration,db:p.db,artist:p.artist}))(CRATE.MX.slots.vocals)")
+    page.click('[data-mxrow="vocals"] [data-trmore]'); page.click('[data-mxrow="vocals"] .trmenu [data-mxshot]')
+    page.wait_for_function("CRATE.MX.roles.vocals==='oneshot'&&CRATE.MX.slots.vocals.buf&&!CRATE.MX.slots.vocals._loading", timeout=120000)
+    p = page.evaluate("(p=>({sample:p.sample,n:p.n,steps:p.steps,dur:p.buf.duration,db:p.db,artist:p.artist}))(CRATE.MX.slots.vocals)")
+    assert p["sample"].startswith(f"stem:{was['track']}:vocals:{was['bar0']}:{was['n']}:")
+    assert abs(p["dur"] - was["dur"]) < 0.01 and p["steps"] == [0] and p["n"] == min(8, 2 * was["n"])
+    assert p["db"] == was["db"] and p["artist"] == was["artist"]
+    assert page.locator('[data-mxrow="vocals"] .mxsteps .mxst.on').count() == 1          # its step grid, one hit
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots.vocals.sample") == p["sample"]
+    # the tempo changes: it is rendered again at the new tempo (it is a part, not a fixed sample)
+    page.fill("#mxbpm", "110"); page.dispatch_event("#mxbpm", "change")
+    page.wait_for_function(f"Math.abs(CRATE.MX.slots.vocals.buf.duration-{was['dur'] * 100 / 110})<0.02", timeout=120000)
+    page.click('[data-mxhist="vocals:-1"]')
+    page.wait_for_function(f"CRATE.MX.roles.vocals==='vocals'&&CRATE.MX.slots.vocals.track==={was['track']}&&CRATE.MX.slots.vocals.buf", timeout=120000)
+
+
+def test_one_shot_plays_backwards_and_in_part(site, page):
+    """◀ reverse plays the piece backwards; ⇧-click on a hit makes it play the first half, a quarter, then all again."""
+    _mixer(site, page)
+    sid = _one_shot(page)
+    page.wait_for_function(f"!!CRATE.MX.slots['{sid}'].buf")
+    step = page.evaluate(f"CRATE.MX.slots['{sid}'].steps[0]")
+    sel = f'[data-mxstep="{sid}:{step}"]'
+    page.click(sel, modifiers=["Shift"])
+    assert page.evaluate(f"CRATE.MX.slots['{sid}'].gate[{step}]") == 0.5 and "g2" in page.get_attribute(sel, "class")
+    page.click(sel, modifiers=["Shift"])
+    assert page.evaluate(f"CRATE.MX.slots['{sid}'].gate[{step}]") == 0.25 and "g4" in page.get_attribute(sel, "class")
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots['%s'].gate['%s']" % (sid, step)) == 0.25
+    page.click(sel, modifiers=["Shift"])
+    assert page.evaluate(f"Object.keys(CRATE.MX.slots['{sid}'].gate).length") == 0 and page.evaluate(f"CRATE.MX.slots['{sid}'].steps.length") >= 1
+    page.click(f'[data-mxrow="{sid}"] [data-mxtrimopen]')
+    page.click(f'[data-mxback="{sid}"]')
+    assert page.evaluate(f"CRATE.MX.slots['{sid}'].back") is True and "dirty" in page.get_attribute("#mxsave", "class")
+    assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots['%s'].back" % sid) is True

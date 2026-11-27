@@ -133,13 +133,13 @@ input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:#2a2
 .pbx.pbmaster{border-style:solid;background:#11141a}
 /* Mashup uses the full width. Tracks have a header, a waveform and an effects row. */
 body.mash .projbar{display:none}
-.mxtop{gap:8px 9px}.mxtop .mxfit{margin-left:4px}.mxrate{display:inline-flex;gap:3px}.mxsaveg{display:inline-flex;gap:6px;align-items:center;margin-left:auto}.mxtop #mxclear{color:var(--mute);min-width:76px;text-align:center}.mxtop #mxclear.ask{color:#fff;background:#a8452f;border-color:#a8452f}
+.mxtop{gap:8px 9px}.mxtop .mxfit{margin-left:4px}.mxrate{display:inline-flex;gap:3px}.mxsaveg{display:inline-flex;gap:6px;align-items:center;margin-left:auto}.mxtop #mxclear{color:var(--mute);min-width:76px;text-align:center}.mxtop #mxnew{min-width:58px;text-align:center}.mxtop #mxnew.ask,.mxtop #mxclear.ask{color:#fff;background:#a8452f;border-color:#a8452f}
 .mxmaster,.mxmaster label{display:inline-flex;align-items:center;gap:4px}.mxmaster>span{min-width:7ch;font-variant-numeric:tabular-nums;color:var(--mute)}
 /* a one-shot slot's timeline: 16 steps a bar, hits lit; the axis under it numbers the cycle's bars, tinted by fit */
 .trk .mxsteps{display:grid;grid-template-rows:20px minmax(0,1fr) 13px;background:#0e1013;height:58px}
 .mxsg{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));gap:1px;padding:2px 0 1px}
 .mxst{border:0;border-radius:2px;background:#171b21;padding:0;min-width:0;cursor:pointer}.mxst.beat{background:#1f242c}.mxst.bar{background:#2b313c}
-.mxst:hover{outline:1px solid var(--mute)}.mxst.on{background:var(--VOX,#e0a458)}
+.mxst:hover{outline:1px solid var(--mute)}.mxst.on.g2{background:linear-gradient(to top,var(--VOX,#e0a458) 55%,#3a3020 55%)}.mxst.on.g4{background:linear-gradient(to top,var(--VOX,#e0a458) 28%,#3a3020 28%)}.mxst.on{background:var(--VOX,#e0a458)}
 .mxsax{display:grid;grid-template-columns:repeat(var(--b),minmax(0,1fr));font:9.5px/13px ui-monospace,Menlo,monospace;color:#8a93a0;background:#0b0d10}
 .mxsax span{padding-left:4px;border-left:1px solid rgba(255,255,255,.3);background:rgba(143,201,143,calc(var(--f,0)*.28))}.mxsax span:first-child{border-left:0}
 .mxask{margin:0 0 10px;padding:8px 12px;border:1px solid var(--acc);border-radius:10px;background:#1a1710;display:flex;gap:8px;align-items:center;flex-wrap:wrap}

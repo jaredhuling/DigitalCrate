@@ -87,6 +87,11 @@ Hover over the song for the full name and why that part was picked.
   (a few minutes a song, about 65 MB each) and keeps their stems. Reference-only artists are never used. Hip-hop gives
   vocals only. `digitalcrate stems --new-artists --random 100` takes songs by artists Mashup has nothing from yet,
   one song an artist. Open **songs prepared for Mashup** to put a song's stem straight into a track.
+- **Keys within a song:** a long piece can pass through several keys. Each prepared song has a chord for every bar
+  and a key for each stretch, and a part is shifted by the key of its own bars (the track shows it). Songs prepared
+  earlier get this from `digitalcrate stems --chords-only` (about a second a song).
+- **＋ new** starts a new mashup: a clean slate with a first combination dealt. It asks first if you have unsaved
+  changes. **Clear all** leaves the slate empty.
 - **Tops** holds the hi-hat, ride and crash. Pick them with the Tops button in the song list. Drums plays the
   rest of the kit once a song has Tops. **digitalcrate stems** makes Tops for earlier songs first, adding about
   15 to 20 MB per song. Use `digitalcrate stems --tops-only` to prepare just those songs. Until then, Drums plays
@@ -97,7 +102,9 @@ Hover over the song for the full name and why that part was picked.
   forward through its parts. **S** solos the track, **M** mutes it, and the volume slider resets to 0 dB on a double-click.
 - **⋯** opens the track's options. **Choose the song** opens a search and uses the song's best-fitting bars (✕, **Esc** or a
   click elsewhere closes it). **Other takes** goes through other
-  stretches of the same song. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
+  stretches of the same song. **Play it as a one-shot** turns the part into a one-shot track: the same audio, placed
+  on steps of a cycle (it starts as once, then a rest of the same length), with a one-shot's trim, fades and warp;
+  ↶ brings the loop back. **Keep on “all”** locks the part. **Duplicate** copies the track and its settings right
   below. **Empty this track** takes out its part. **Plays** changes the role, and **Remove the track** removes it.
   **＋ add slot** adds another track, up to eight. **Clear all** empties the mixer.
 - **Move the loop.** The waveform shows the whole stem, with the loop lit and the rest gray. Drag the right edge to
@@ -107,7 +114,8 @@ Hover over the song for the full name and why that part was picked.
   mixer bars per song bar. The old loop keeps playing until the new one is ready.
 - **Zoom and pan.** Pinch or hold **⌘** or **Ctrl** while scrolling to zoom around the pointer, down to two bars.
   Swipe sideways or drag the gray to pan. Hover over a waveform for **Loop** and **Whole song**. **Loops** and
-  **Whole song** at the top change the view across the mixer. The white line follows playback.
+  **Whole song** at the top change the view across the mixer; tracks open on their loops, and your choice is
+  remembered. The white line follows playback.
 - **Pitch** takes semitones and cents, including on drums. Drag either number up or to the right for more, hold **Shift** for
   a drag five times finer, click it to type a value, or focus it and press **↑ ↓**. Double-click to reset. The line
   under a number shows where it sits in its range. The pitch changes when you let go. A track's semitones move that
@@ -144,7 +152,8 @@ Hover over the song for the full name and why that part was picked.
   axis and exact trim times. Hold **Shift** while dragging for finer control. The start and end buttons nudge by
   5 ms, or 1 ms with **Shift**. Use **fade in** and **fade out** to shape hits, and **warp** to fit the piece
   to ¼, ½, 1 or 2 bars at the mixer tempo while keeping its pitch, or to any length in beats (a 16th note is
-  0.25; type anything finer). The **Harmonics** switch adds overtones to
+  0.25; type anything finer). **◀ reverse** plays the piece backwards. **⇧-click** a hit to have it play
+  the first half of the piece, then a quarter, then all of it again. The **Harmonics** switch adds overtones to
   low one-shots.
 - **⇩ Ableton** writes the mashup as a Live set, dry: a track per slot, each part a looping clip at the tempo; with
   snapshots, they are laid end to end (4, 8 or 16 bars each) with a marker each. A snapshot's own level becomes the

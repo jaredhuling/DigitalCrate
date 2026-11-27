@@ -1,6 +1,7 @@
 # Plan: chord variants of a part in Mashup
 
-Status: researched, not built.
+Status: step 1 built (a chord for every bar of a prepared song, and the key of each stretch; parts are shifted by
+the key of their own bars). Steps 2 to 4 not built.
 
 ## The idea
 
@@ -51,6 +52,19 @@ of the key's major chords, a chain of its minor chords).
    - **A sequence** (later): a track holds up to four variants and steps to the next each time its loop comes
      round, so one track plays a progression. The server renders each; the browser already schedules loops on the
      bar clock.
+
+## Step 1 as built
+
+`digitalcrate/songkeys.py`. The chord recognizer runs over Other + Bass once per song (about a second), and the meta
+keeps `chords` (one a bar) and `keys` (`[first bar, pitch class, scale]` per stretch). A stretch's key is the one
+whose chords cover it best, with two guards against false changes: the filed key has a head start and a change must
+hold for a while; and the stretch's notes (the per-bar chroma, an independent reading) must fit the new key better
+than the filed one, by more when the change is to the same tonic in the other mode. On the first 173 songs, 16 leave
+their filed key somewhere. Not checked by ear. `digitalcrate stems --chords-only` fills in songs prepared before;
+new songs get it as they are prepared.
+
+For step 2, note that chords read from Other + Bass name the harmony (an A minor pad over an F bass reads as F);
+variants of a pad may want the chords of Other alone.
 
 ## Order
 

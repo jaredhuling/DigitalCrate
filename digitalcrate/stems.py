@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import basscond, config as C
+from . import basscond, config as C, songkeys
 from .db import connect
 
 DIR = C.DATA_DIR / "stems"
@@ -239,8 +239,13 @@ def prepare_track(con, row, separate=True):
                 chroma=chroma, stems=["vocals"] if policy == "vocals_only" else list(STEMS), separated=bool(separate))
     meta = _levels(row["id"], meta)
     if "drums" in meta["stems"]:
-        return make_tops(row["id"], split=None if separate else _rough_tops,
-                         embed=lambda seg: cl.embed_audio([to_mono48(seg)])[0])
+        meta = make_tops(row["id"], split=None if separate else _rough_tops,
+                         embed=lambda seg: cl.embed_audio([to_mono48(seg)])[0]) or meta
+    if separate and "other" in meta["stems"]:
+        try:  # its chords and the key of each stretch (without madmom: its filed key throughout, until a later pass)
+            meta = make_chords(row["id"]) or meta
+        except ImportError:
+            pass
     return meta
 
 
@@ -303,11 +308,89 @@ def top_up(limit=None, split=None, embed=None, *, standalone=True):
     return made
 
 
-def prepare(n_random=40, limit=None, separate=True, tops_only=False, new_artists=False):
+HARMONY = ("other", "bass")  # the stems whose chords are read
+
+
+def make_chords(track, chords=None):
+    """A prepared song's chord in every bar, and the key of each stretch of it (songkeys), kept in its meta.
+    chords: (mono, sr) -> [(start, end, name)]; the recognizer used for pads when left out. -> the meta, or None if
+    the song has no Other stem to read chords from."""
+    import soundfile as sf
+    meta = _meta_path(track)
+    m = json.loads(meta.read_text())
+    if "other" not in m["stems"]:
+        return None
+    if chords is None:
+        from .pads import chords
+    y, sr = None, C.SR
+    for k in HARMONY:
+        f = meta.with_name(f"{k}.flac")
+        if k in m["stems"] and f.is_file():
+            a, sr = sf.read(str(f), dtype="float32", always_2d=True)
+            a = a.mean(1)
+            y = a if y is None else y[:min(len(y), len(a))] + a[:min(len(y), len(a))]
+    if y is None:
+        return None
+    per = songkeys.bar_chords(chords(y, sr), m["bars"])
+    m = json.loads(meta.read_text())  # as it is now: reading the audio took a moment
+    m["chords"] = per
+    m["keys"] = songkeys.local_keys(per, (m["pc"], m["scale"]), m.get("chroma"))
+    with _cache_output(meta) as tmp:
+        tmp.write_text(json.dumps(m))
+    return m
+
+
+def rekey(track):
+    """Work out a song's keys again from the chords already read (after the rules in songkeys changed)."""
+    meta = _meta_path(track)
+    m = json.loads(meta.read_text())
+    if "chords" not in m:
+        return None
+    m["keys"] = songkeys.local_keys(m["chords"], (m["pc"], m["scale"]), m.get("chroma"))
+    with _cache_output(meta) as tmp:
+        tmp.write_text(json.dumps(m))
+    return m
+
+
+def chord_up(limit=None, chords=None, *, standalone=True):
+    """Chords and keys for the songs prepared before they were kept (about a second a song)."""
+    songs = [(tid, m) for tid, m in library().items() if "other" in m["stems"] and "chords" not in m][:limit]
+    if not songs:
+        return 0
+    if chords is None:
+        try:
+            import madmom  # noqa: F401
+        except Exception:
+            print("    chords need madmom (see the README): parts keep their song's filed key until then", flush=True)
+            return 0
+    print(f"TASK reading the chords of {len(songs)} prepared songs", flush=True)
+    made = changed = 0
+    for k, (tid, m) in enumerate(songs, 1):
+        try:
+            got = make_chords(tid, chords)
+            made += got is not None
+            ks = (got or {}).get("keys") or []
+            if len(ks) > 1 or (ks and songkeys._major_of(ks[0][1], ks[0][2]) != songkeys._major_of(m["pc"], m["scale"])):
+                changed += 1
+                print(f"    {m['artist']} - {m['title']} (filed {songkeys.name(m['pc'], m['scale'])}): " + ", ".join(
+                    f"bar {s + 1} {songkeys.name(pc, sc)}" for s, pc, sc in ks[:8]), flush=True)
+        except Exception as e:
+            print(f"    {m['artist']} - {m['title']}: {str(e)[:100]}", flush=True)
+        if k % 10 == 0 or k == len(songs):
+            print(f"chords: {k}/{len(songs)} [{changed} not in their filed key throughout]", flush=True)
+    print(f"{'TASK DONE ' if standalone else ''}chords read for {made} songs ({changed} not in their filed key throughout)", flush=True)
+    return made
+
+
+def prepare(n_random=40, limit=None, separate=True, tops_only=False, new_artists=False, chords_only=False):
     from .memguard import breathe
+    if chords_only:
+        chord_up(limit)
+        return
     top_up(limit, split=None if separate else _rough_tops, standalone=tops_only)
     if tops_only:
         return
+    chord_up(limit, standalone=False)
     con = connect()
     ids = choose_new_artists(con, n_random) if new_artists else choose(con, n_random)
     ids = ids[:limit] if limit else ids
@@ -504,14 +587,20 @@ def parse_key(key):
     return (NOTES.index(name), "minor" if minor else "major") if name in NOTES else None
 
 
-def key_semis(m, target):
-    """The smallest shift that brings a song's key to target (pc, scale); relative major / minor count as the same."""
+def key_semis(m, target, bar0=None, ns=None):
+    """The smallest shift that brings a song's key to target (pc, scale); relative major / minor count as the same.
+    bar0, ns: the song's bars in question: their own key where the song changes key (songkeys), else its filed key."""
     if not target:
         return 0
+    pc, scale = songkeys.key_at(m, bar0, ns)
     tpc, tsc = target
-    if m["scale"] != tsc:
-        tpc = (tpc + 9) % 12 if m["scale"] == "minor" else (tpc + 3) % 12
-    return ((tpc - m["pc"] + 6) % 12) - 6
+    if scale != tsc:
+        tpc = (tpc + 9) % 12 if scale == "minor" else (tpc + 3) % 12
+    return ((tpc - pc + 6) % 12) - 6
+
+
+def _part_key(m, p):
+    return songkeys.key_at(m, p.get("bar0"), src_bars(int(p.get("n") or 4), float(p.get("k") or 1)))
 
 
 def _role(sid, p):
@@ -539,7 +628,7 @@ def target_key(state, skip=None):
         for sid, stem, p in parts:
             if stem == want and sid != skip:
                 m = lib[int(p["track"])]
-                return (m["pc"] % 12, m["scale"])
+                return _part_key(m, p)
     return None
 
 
@@ -582,7 +671,8 @@ def _semis(state, stem, part, lib, target=None):
     off = int(part.get("off") or 0)
     if stem in DRUM_ROLES:
         return off
-    return key_semis(lib[int(part["track"])], target or target_key(state)) + off
+    return key_semis(lib[int(part["track"])], target or target_key(state), part.get("bar0"),
+                     src_bars(int(part.get("n") or 4), float(part.get("k") or 1))) + off
 
 
 def info(state):
@@ -592,7 +682,7 @@ def info(state):
     for sid, s, p in _parts(state, lib):
         m = lib[int(p["track"])]
         sm = _semis(state, s, p, lib, tk)
-        out[sid] = dict(semis=sm, src_bpm=m["bpm"], key=NOTES[m["pc"]] + ("m" if m["scale"] == "minor" else ""))
+        out[sid] = dict(semis=sm, src_bpm=m["bpm"], key=songkeys.name(*_part_key(m, p)))
         if s in PITCHED:
             parts.append((m, int(p["bar0"]), int(p["n"]), sm, float(p.get("k") or 1)))
     fits = [fit(parts[i], parts[j]) for i in range(len(parts)) for j in range(i + 1, len(parts))]
@@ -673,7 +763,7 @@ def features(stem, m, bar0, n, state, lib, taste, target, k=1, slot=None):
     ns = src_bars(n, k)
     act = float(np.mean(m["act"][stem][bar0:bar0 + ns]))
     ratio = m["bpm"] / (float(state.get("bpm") or m["bpm"]) * k)
-    semis = 0 if stem in DRUM_ROLES else key_semis(m, target)
+    semis = 0 if stem in DRUM_ROLES else key_semis(m, target, bar0, ns)
     fits = []
     if stem in PITCHED:
         for sid, s, p in _parts(state, lib):
@@ -928,14 +1018,25 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None):
 ROLE_CAT = dict(drums="Percussion", tops="Percussion", bass="Bass & Sub", vocals="Vocals", other="Chords & Keys", oneshot="Vocal Atmospheres")
 
 
+def shot_source(sample, key, bpm):
+    """The audio a one-shot slot plays: a library sample shifted to the key, or, for a stem part turned into a one-shot
+    ("stem:<track>:<stem>:<bar0>:<n>:<k>:<semis>:<cond>:<legacy>"), that part rendered at the tempo (its shift is the
+    one it had when it was turned). -> path"""
+    if str(sample).startswith("stem:"):
+        _, track, stem, bar0, n, k, semis, cond, legacy = str(sample).split(":")
+        return render(int(track), stem, int(bar0), int(n), float(bpm), float(semis), float(k), legacy=legacy == "1",
+                      cond=int(cond or 0))
+    from .conform import render as conform
+    return conform(sample, key=key or None)[0]
+
+
 def oneshot_warp(path, key, trim, beats, bpm, semis=0):
     """A one-shot's piece (trim: [from, to] as fractions of the sample shifted to the key) stretched to exactly
     `beats` at bpm, its pitch kept (plus `semis`, your own offset, also without changing the length). -> cached WAV.
     Stretches beyond 2.5x or under 0.4x smear: refused."""
     import soundfile as sf
-    from .conform import render as conform
     from .stretch import signalsmith
-    src, _ = conform(path, key=key or None)
+    src = shot_source(path, key, bpm)
     semis = round(float(semis), 2) or 0.0
     t = trim if trim and trim[1] - trim[0] > 0.005 else [0, 1]
     h = hashlib.sha1(f"{path}|{src.stat().st_mtime}|{key}|{t[0]:.5f}|{t[1]:.5f}|{beats}|{float(bpm):.2f}|{semis}".encode()).hexdigest()[:16]
@@ -963,12 +1064,11 @@ def oneshot_loop(p, bpm, key, out):
     """A one-shot slot's pattern as a loop: its sample (shifted to the key, trimmed, at your pitch offset) at each of
     its steps, in a file exactly as long as the pattern takes to come round (cycle x every). -> beats"""
     import soundfile as sf
-    from .conform import render as conform
     from .stretch import repitch
     warped = bool(p.get("warp"))
     semis = float(p.get("off") or 0) + float(p.get("ct") or 0) / 100
     src = oneshot_warp(p["sample"], key, p.get("trim"), p["warp"], bpm, semis) if warped \
-        else conform(p["sample"], key=key or None)[0]
+        else shot_source(p["sample"], key, bpm)
     y, sr = sf.read(str(src), dtype="float32", always_2d=True)
     y = y.T
     if y.shape[0] == 1:
@@ -982,15 +1082,23 @@ def oneshot_loop(p, bpm, key, out):
             y = y[:, int(t[0] * y.shape[1]):int(t[1] * y.shape[1])]
         if semis:
             y = repitch(y, semis)  # as the mixer plays it: pitch and length together
-    y = y.copy()
-    for ms, tail in ((p.get("fin") or 3, False), (p.get("fout") or 3, True)):  # your fades (3 ms at least: no clicks)
-        f = min(int(max(3.0, float(ms)) / 1000 * C.SR), y.shape[1] // 2)
-        if f:
-            ramp = np.linspace(0, 1, f, dtype=np.float32)
-            if tail:
-                y[:, -f:] *= ramp[::-1]
-            else:
-                y[:, :f] *= ramp
+    if p.get("back"):
+        y = y[:, ::-1]  # played backwards
+
+    def hit(frac):
+        """The piece as one hit plays: its first `frac` (a step can play half or a quarter), with your fades."""
+        h = y[:, :max(1, int(y.shape[1] * frac))].copy()
+        for ms, tail in ((p.get("fin") or 3, False), (p.get("fout") or 3, True)):  # 3 ms at least: no clicks
+            f = min(int(max(3.0, float(ms)) / 1000 * C.SR), h.shape[1] // 2)
+            if f:
+                ramp = np.linspace(0, 1, f, dtype=np.float32)
+                if tail:
+                    h[:, -f:] *= ramp[::-1]
+                else:
+                    h[:, :f] *= ramp
+        return h
+
+    gate = {int(k): float(v) for k, v in (p.get("gate") or {}).items()}
     n, every = int(p.get("n") or 1), int(p.get("every") or 1)
     beats = n * every * 4
     N = int(round(beats * 60.0 / float(bpm) * C.SR))
@@ -998,10 +1106,11 @@ def oneshot_loop(p, bpm, key, out):
     step = 60.0 / float(bpm) / 4 * C.SR
     for st in p.get("steps") or []:
         a = int(round(st * step))
-        seg = y[:, :max(0, N - a)]
+        y1 = hit(gate.get(int(st), 1.0))
+        seg = y1[:, :max(0, N - a)]
         loop[:, a:a + seg.shape[1]] += seg
-        if y.shape[1] > N - a:  # it rings past the end: into the start of the next time round
-            tail = y[:, N - a:N - a + N]
+        if y1.shape[1] > N - a:  # it rings past the end: into the start of the next time round
+            tail = y1[:, N - a:N - a + N]
             loop[:, :tail.shape[1]] += tail
     sf.write(str(out), np.clip(loop, -1, 1).T, C.SR, subtype="PCM_24")
     return beats

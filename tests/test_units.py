@@ -1059,3 +1059,93 @@ def test_new_bass_parts_are_rendered_even_and_old_ones_as_before(tmp_path, monke
     quiet[:, quiet.shape[1] // 2] = -0.2
     sf.write(str(stems.DIR / "t2" / "bass.flac"), quiet.T, SR, format="FLAC", subtype="PCM_16")
     assert float(np.abs(read(stems.render(2, "bass", 0, 1, 100, cond=1))).max()) <= 0.9
+
+
+def test_a_songs_keys_follow_its_chords():
+    """One chord a bar; the key of each stretch is the one whose chords cover it. The filed key is believed unless
+    the chords clearly say otherwise, and a borrowed chord isn't a change of key."""
+    from digitalcrate import songkeys as K
+    assert K.parse("B♭m") == (10, True) and K.parse("F♯") == (6, False) and K.parse("C") == (0, False) and K.parse("N") is None
+    bars = [b * 2.0 for b in range(5)]
+    assert K.bar_chords([(0, 2.1, "C"), (2.1, 3.0, "G"), (3.0, 5.9, "Am"), (7.8, 8, "F")], bars) == ["C", "Am", "Am", None]
+    # 40 bars of A♭ major / F minor (filed: F minor), then 40 bars of C, G, Am, F: a second key, from bar 41
+    first, second = ["Fm", "B♭m", "D♭", "E♭"] * 10, ["C", "G", "Am", "F"] * 10
+    keys = K.local_keys(first + second, (5, "minor"))
+    assert [(pc, sc) for _, pc, sc in keys] == [(5, "minor"), (0, "major")] and abs(keys[1][0] - 40) <= 2
+    m = dict(pc=5, scale="minor", bars=list(range(81)), keys=keys)
+    assert K.key_at(m, 8, 4) == (5, "minor") and K.key_at(m, 60, 4) == (0, "major") and K.key_at(m) == (5, "minor")
+    assert K.key_at(dict(pc=5, scale="minor", bars=[0, 1]), 0, 1) == (5, "minor")        # not analysed: the filed key
+    # two borrowed bars in the middle of a song don't change its key; nor do chords the filed key shares with a neighbor
+    assert len(K.local_keys(["C", "F", "G", "Am"] * 6 + ["B♭", "E♭"] + ["C", "F", "G", "Am"] * 6, (0, "major"))) == 1
+    assert K.local_keys(["C", "F"] * 20, (0, "major")) == [[0, 0, "major"]]               # (C and F are also in F major)
+    assert K.local_keys(["A", "D", "E"] * 12, (6, "minor")) == [[0, 6, "minor"]]          # the relative major's chords: its name stays
+    assert K.local_keys([None] * 30 + ["C"], (0, "major")) == []                          # too little to go on
+    # a second opinion from the notes: a stretch leaves the filed key only if its notes fit the new key better
+    tri = lambda *pcs: [1.0 if k in pcs else 0.0 for k in range(12)]
+    in_c, in_ab = tri(0, 2, 4, 5, 7, 9, 11), tri(8, 10, 0, 1, 3, 5, 7)
+    assert len(K.local_keys(first + second, (5, "minor"), [in_ab] * 40 + [in_c] * 40)) == 2      # the notes agree: two keys
+    assert K.local_keys(first + second, (5, "minor"), [in_ab] * 80) == [[0, 5, "minor"]]         # they don't: the filed key
+    assert K.notes_fit(in_c, 0) > K.notes_fit(in_c, 8) + 0.5
+
+
+def test_parts_are_shifted_by_the_key_of_their_own_bars(tmp_path, monkeypatch):
+    """A song that changes key: a part from its second stretch is shifted from that stretch's key, not the filed one."""
+    import json, sqlite3
+    from digitalcrate import stems
+    monkeypatch.setattr(stems, "DIR", tmp_path / "stems")
+    monkeypatch.setattr(stems, "CACHE", tmp_path / "stems" / "cache")
+    def _con():
+        c = sqlite3.connect(tmp_path / "t.sqlite"); c.row_factory = sqlite3.Row
+        return c
+    monkeypatch.setattr(stems, "connect", _con)
+    stems._LIB.update(n=-1, lib={}); stems._EMB.clear()
+    _fake_stem_song(tmp_path, 1, 100, 0, "major", 0)          # C major throughout
+    _fake_stem_song(tmp_path, 2, 100, 5, "minor", 5)          # filed F minor ...
+    monkeypatch.setattr(stems.songkeys, "SWITCH", 2.0)        # (24 bars: a change of key has little time to show)
+    heard = {}
+    def chords(y, sr):                                        # ... but its second half is C, G, Am, F
+        heard["n"] = len(y)
+        bar = 2.4
+        return [(b * bar, (b + 1) * bar, (["Fm", "B♭m", "D♭", "E♭"] if b < 12 else ["C", "G", "Am", "F"])[b % 4]) for b in range(24)]
+    m = stems.make_chords(2, chords)
+    assert heard["n"] > 0 and m["chords"][0] == "Fm" and m["chords"][13] == "G"
+    rel = stems.songkeys._major_of                             # (C major and A minor are the same chords)
+    assert [rel(pc, sc) for _, pc, sc in m["keys"]] == [8, 0]
+    assert json.loads((stems.DIR / "t2" / "meta.json").read_text())["keys"] == m["keys"]
+    lib = stems.library()
+    assert stems.key_semis(lib[2], (0, "major"), 2, 4) == 4 and stems.key_semis(lib[2], (0, "major"), 16, 4) == 0
+    state = dict(bpm=100, key="C", slots=dict(other=dict(track=1, bar0=0, n=4, off=0), bass=dict(track=2, bar0=16, n=4, off=0)))
+    i = stems.info(state)
+    assert i["slots"]["bass"]["semis"] == 0 and i["slots"]["bass"]["key"] in ("C", "Am")
+    state["slots"]["bass"]["bar0"] = 2
+    assert stems.info(state)["slots"]["bass"]["semis"] == 4 and stems.info(state)["slots"]["bass"]["key"] == "Fm"
+    # a stem part turned into a one-shot plays that part, rendered at the tempo
+    import soundfile as sf
+    src = stems.shot_source("stem:1:other:4:2:1:0:0:0", "C", 120)
+    assert src == stems.render(1, "other", 4, 2, 120, 0, 1) and sf.info(str(src)).frames == round(2 * 240 / 120 * SR)
+    # the pass: songs without chords yet get them; one already done is left alone
+    out = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a))))
+    assert stems.chord_up(chords=chords) == 1 and "chords" in stems.library()[1]
+    assert stems.chord_up(chords=chords) == 0
+
+
+def test_one_shot_export_plays_backwards_and_in_part(tmp_path, monkeypatch):
+    """In the Live set as in the mixer: a reversed one-shot is written backwards, and a hit set to play half of the
+    piece stops there."""
+    import soundfile as sf
+    from digitalcrate import conform, stems
+    n = int(0.4 * SR)
+    ramp = np.linspace(0.05, 0.9, n, dtype=np.float32)                 # quiet at its start, loud at its end
+    sample = tmp_path / "ramp.wav"
+    sf.write(sample, np.stack([ramp, ramp]).T, SR, subtype="FLOAT")
+    monkeypatch.setattr(conform, "render", lambda path, key=None: (sample, None))
+    part = dict(sample=sample.name, steps=[0], n=1)
+    read = lambda f: sf.read(str(f), dtype="float32", always_2d=True)[0][:, 0]
+    stems.oneshot_loop(part, 100, None, tmp_path / "a.wav")
+    stems.oneshot_loop(dict(part, back=True), 100, None, tmp_path / "b.wav")
+    stems.oneshot_loop(dict(part, gate={"0": 0.5}), 100, None, tmp_path / "c.wav")
+    a, b, c = read(tmp_path / "a.wav"), read(tmp_path / "b.wav"), read(tmp_path / "c.wav")
+    q = n // 4
+    assert a[q] < a[3 * q] and b[q] > b[3 * q]                         # the other way round
+    assert abs(c[q] - a[q]) < 1e-3 and abs(c[3 * q]) < 1e-4 and abs(a[3 * q]) > 0.5   # the first half only

@@ -99,6 +99,8 @@ def main():
                     help="--random N songs by artists Mashup has nothing from yet, one song an artist (favorites' artists first)")
     sm.add_argument("--no-separate", action="store_true", help="tests: rough stand-in stems, no separator")
     sm.add_argument("--tops-only", action="store_true", help="make Tops for songs already prepared")
+    sm.add_argument("--chords-only", action="store_true",
+                    help="read the chords and the key of each stretch of the songs already prepared (about a second a song)")
     gr = sub.add_parser("grain", help="check stem samples for separation grain (grainy ones rank lower)")
     gr.add_argument("--redo", action="store_true")
     gr.add_argument("--recut", action="store_true", help="cut the grainy samples again with the better separator (in place)")
@@ -292,7 +294,8 @@ def main():
         sections(a.limit)
     elif a.cmd == "stems":
         from .stems import prepare
-        prepare(a.random, a.limit, separate=not a.no_separate, tops_only=a.tops_only, new_artists=a.new_artists)
+        prepare(a.random, a.limit, separate=not a.no_separate, tops_only=a.tops_only, new_artists=a.new_artists,
+                chords_only=a.chords_only)
     elif a.cmd == "grain":
         if a.recut:
             from .grain import recut
