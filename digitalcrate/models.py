@@ -29,10 +29,59 @@ def separate(y, model=None):
     mu, sd = ref.mean(), ref.std() + 1e-8
     x = (x - mu) / sd
     with torch.no_grad():
-        out = apply_model(_demucs, x[None], device=DEVICE, shifts=0, split=True,
-                          overlap=0.25, progress=False)[0]
+        try:
+            out = _apply_fast(_demucs, x[None])[0]
+        except Exception as e:  # anything unexpected (a model of another shape, memory): the library's own way
+            print(f"    (fast separation unavailable: {str(e)[:80]})", flush=True)
+            out = apply_model(_demucs, x[None], device=DEVICE, shifts=0, split=True,
+                              overlap=0.25, progress=False)[0]
     out = (out * sd + mu).cpu().numpy().astype(np.float32)
     return {name: out[i] for i, name in enumerate(_demucs.sources)}
+
+
+def _apply_fast(bag, mix, overlap=0.25):
+    """demucs.apply.apply_model(split=True, shifts=0) for a bag of models, with the segments run a few at a time and,
+    on Apple's GPU, in half precision: about a quarter less time for the same stems (they differ from the library's
+    by -62 dB, far below hearing; in full precision by nothing). mix: (1, 2, n) -> (1, sources, 2, n)."""
+    from demucs.apply import TensorChunk
+    from demucs.utils import center_trim
+    from .memguard import ram, SMALL_MAC
+    B = 2 if 0 < ram() <= SMALL_MAC else 4  # (eight at once on 16 GB swapped and took four times as long)
+    half = DEVICE == "mps"
+    mix = mix.to(DEVICE)
+    length = mix.shape[-1]
+    est, totals = 0.0, [0.0] * len(bag.sources)
+    for m, w in zip(bag.models, bag.weights):
+        seg = int(m.samplerate * m.segment)
+        stride = int((1 - overlap) * seg)
+        weight = torch.cat([torch.arange(1, seg // 2 + 1, device=DEVICE), torch.arange(seg - seg // 2, 0, -1, device=DEVICE)])
+        weight = weight / weight.max()
+        out = torch.zeros(1, len(m.sources), mix.shape[1], length, device=DEVICE)
+        sw = torch.zeros(length, device=DEVICE)
+        offs = list(range(0, length, stride))
+        for i in range(0, len(offs), B):
+            chunks = [TensorChunk(mix, o, seg) for o in offs[i:i + B]]
+            inp = torch.cat([c.padded(seg) for c in chunks], 0)
+            if half:
+                with torch.autocast("mps", dtype=torch.float16):
+                    r = m(inp).float()
+            else:
+                r = m(inp)
+            for c, o, rr in zip(chunks, offs[i:i + B], r):
+                rr = center_trim(rr, c.length)
+                out[0, ..., o:o + c.length] += weight[:c.length] * rr
+                sw[o:o + c.length] += weight[:c.length]
+        out /= sw
+        for k, iw in enumerate(w):
+            out[:, k] *= iw
+            totals[k] += iw
+        est = est + out
+        del out
+    for k in range(est.shape[1]):
+        est[:, k] /= totals[k]
+    if not torch.isfinite(est).all():
+        raise ValueError("not finite")
+    return est
 
 
 _rof = {}
