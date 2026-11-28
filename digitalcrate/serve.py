@@ -325,6 +325,15 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    @staticmethod
+    def _notes():
+        """Newly mined samples the harmony fit hasn't measured: in the background (notes.py)."""
+        try:
+            from . import notes
+            notes.catch_up()
+        except Exception:
+            pass
+
     def _dealt(self, SM, part, rec, surface, deal, req):
         """A deal's impression: written now (its id goes back with the part), or kept for later if prefetched."""
         extra = {k: req[k] for k in ("list", "rank") if req.get(k) is not None}
@@ -685,6 +694,7 @@ class Handler(SimpleHTTPRequestHandler):
                     rec = {} if deal else None
                     parts = SM.top_fits(req["role"], state, req.get("slot"), req.get("n"), req.get("top") or 12, rec=rec,
                                         song=req.get("song"))
+                    self._notes()
                     return self._json(dict(parts=parts, imp=SM.deal(rec, "mashup.best_list", deal) if parts else None))
                 if what == "oneshot":
                     pad = req.get("kind") == "pad"
@@ -692,6 +702,7 @@ class Handler(SimpleHTTPRequestHandler):
                     fn = SM.pad if pad else SM.oneshot
                     part = fn(state, req.get("n") or (4 if pad else 1), set(req.get("avoid") or []), path=req.get("path"),
                               rec=rec, slot=req.get("slot"))
+                    self._notes()
                     if part and rec:
                         surface = "mashup.best" if deal == "best" else "mashup.find" if req.get("path") \
                             else "mashup.pad" if pad else "mashup.oneshot"

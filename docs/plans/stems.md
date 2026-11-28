@@ -72,6 +72,18 @@ get); the first hit goes on the bar it fits best. Hits are scheduled on the mixe
 chain, so volume, EQ, delay and reverb apply. Not yet: one-shot slots in the play-strip view (snapshots keep them,
 the strip doesn't play them), and learning from which one-shots you keep beyond counting as a listen.
 
+**How a sample's fit is scored** (one-shots and pads; `notes.py`, `stems.cycle_target`). Each sample's notes are
+measured at 36 positions an octave, which gives its tuning (cents off the grid, and how steady) and the share of its
+energy on each note, read on its own grid with the floor taken off. Each bar of the cycle gets a worth per note from
+what the other tracks play: 1 for a chord tone (the chords of the stem parts' own bars, shifted as the parts are, and
+the notes that stand out in the other one-shot and pad tracks), 0.25 for another note of the key, 0 for a note of
+the key a semitone above a chord tone, -1 for a note outside the key. The fit is the sample's shares times those
+worths, cut to 0..1. A sample that sits steadily 8 cents or more off the other tracks' tuning is dealt with the cents
+that bring it in. The earlier fit (the cosine of two 12-note chromas) matched vague samples to any harmony at
+95-98% and ignored tuning; it stays selectable (`fit: old` in `_data/reco/settings.json`). The logged deals can't
+tell the two apart yet (14 kept one-shots of 144 dealt): this one is judged by ear. On 40 steady samples the tuning
+agreed with a pitch tracker within 15 cents for 85%. Not changed: how stem parts are fitted to each other.
+
 ## Limits
 
 - Separation artifacts show more in an exposed stem than in a mix (see separation grain).

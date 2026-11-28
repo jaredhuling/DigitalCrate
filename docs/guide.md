@@ -127,6 +127,11 @@ Hover over the song for the full name and why that part was picked.
   lasts the whole cycle, going round the sample's seamless loop where the library found one, with a soft fade in and
   out. It is a one-shot track with **∞ hold** on (in **Shape**), so everything a one-shot does works: more hits
   re-attack the pad, and trim, fades and effects apply.
+- **How a one-shot or pad is chosen to fit.** The die and the best-fits list go by the sample's notes against each
+  bar's chords: chord tones count for it, other notes of the key a little, notes outside the key against it. The
+  other one-shot and pad tracks count as harmony too. A sample that sits a little sharp or flat of the other tracks
+  is dealt already tuned: its **ct** box shows the cents (set it to 0 to hear it as recorded).
+- **A mashup left playing** can be stopped from any tab: **■ stop mashup** appears beside the Mashup tab.
 - **Rating on a track:** a stem track has **+** and **−** (this part works here, or doesn't: they teach the
   recommendations for that part alone); a one-shot track has **fav** and **no**, the library's favorite and
   not-for-me for that sample. **Clear all** empties the mixer.

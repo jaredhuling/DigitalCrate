@@ -174,13 +174,13 @@ def test_sound_with_the_songs_own_events_left_out(tmp_path):
 # ---------------------------------------------------------------- the switch, and what the page is served
 
 def test_the_switch(tmp_path):
-    assert live.settings() == dict(samples="new", mashup="new")             # the default
+    assert live.settings() == dict(samples="new", mashup="new", fit="new")             # the default
     assert live.set_setting("mashup", "w0")["mashup"] == "w0" and live.policy("mashup") == "w0"
     assert live.settings()["samples"] == "new"
     with pytest.raises(ValueError):
         live.set_setting("mashup", "sometimes")
     live.SETTINGS.write_text("not json")
-    assert live.settings() == dict(samples="new", mashup="new")             # a broken file: the defaults
+    assert live.settings() == dict(samples="new", mashup="new", fit="new")             # a broken file: the defaults
 
 
 class _Fit:

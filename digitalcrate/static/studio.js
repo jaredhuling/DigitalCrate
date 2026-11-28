@@ -3830,7 +3830,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   b.title=saving?'saving this combination':d?'unsaved changes: save to keep this combination (it also counts as a strong 👍)':'saved';
   BLEND.markSnap();
  }
- const state=()=>({bpm:MX.bpm,key:MX.key||null,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>[s,{stem:role(s),track:MX.slots[s].track,bar0:MX.slots[s].bar0,n:MX.slots[s].n,k:MX.slots[s].k||1,off:MX.slots[s].off||0}]))});
+ const state=()=>({bpm:MX.bpm,key:MX.key||null,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>[s,{stem:role(s),track:MX.slots[s].track,bar0:MX.slots[s].bar0,n:MX.slots[s].n,k:MX.slots[s].k||1,off:MX.slots[s].off||0,ct:MX.slots[s].ct||undefined,sample:MX.slots[s].sample||undefined,semis:MX.slots[s].sample?MX.slots[s].semis||0:undefined,steps:MX.slots[s].sample?MX.slots[s].steps:undefined,hold:MX.slots[s].sample&&MX.slots[s].hold||undefined}]))});  // (a one-shot or pad track's sample and hits: its notes count as harmony for the others)
  const barLenM=()=>240/MX.bpm,DT={'1/4':1/4,'1/8':1/8,'3/16':3/16,'1/16':1/16};
  // audio: source -> low shelf -> mid -> high shelf -> volume -> out, and volume -> send -> delay (with feedback) -> out
  function chain(stem){const p=MX.slots[stem];if(p._c)return p._c;BLEND.out(MX,AC);return p._c=BLEND.mkChain(AC,MX.master,MX.bus)}
@@ -3902,7 +3902,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     let hold=0;if(p.hold){const s0=k%cyc,later=p.steps.filter(x=>x>s0)[0];hold=((later!=null?later:Math.min(...p.steps)+cyc*(p.every||1))-s0)*st}
     try{osLive.add(osHit(id,p,Math.max(now,MX.t0+k*st),(p.gate||{})[k%cyc]||1,hold))}catch(e){console.error('one-shot',id,e)}}  // one track's failed hit must not stop the others (or be retried forever)
    p._next=k})}
- function play(on){heard();MX.on=on;clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
+ function play(on){heard();MX.on=on;stopBtn();clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
   if(on){AC.resume();MX.t0=AC.currentTime+0.05;MX.order.forEach(id=>{if(MX.slots[id])MX.slots[id]._next=null});MX.order.forEach(startSrc);osT=setInterval(osTick,50);osTick()}else MX.order.forEach(s=>stopSrc(s));draw()}  // (draw starts the play lines)
  // Ask for the current parts in parallel. Only the latest sync may swap audio into a slot.
  const cutKey=p=>p&&p.cut&&p.cut.length?p.cut.map(c=>(c[0]==null?'_':c[0])+'+'+c[1]+(c[2]?'r':'')+(c[3]&&c[3]!==1?'s'+c[3]:'')+(c[4]>1?'x'+c[4]:'')).join(',')+(p.xf?'~'+p.xf:''):'';
@@ -4130,7 +4130,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(has(old)&&!(MX.hist[stem]||[]).length)hpush(stem);  // what was there before the first roll can be gone back to as well
   stopSrc(stem);const keep=old?{db:old.db,mute:old.mute,solo:old.solo,eq:old.eq,dly:old.dly,dt:old.dt,fb:old.fb,eqOn:old.eqOn,dlyOn:old.dlyOn,rev:old.rev,revOn:old.revOn,_c:old._c,_v:old._v,_viewMode:old._viewMode,_preset:old._preset}  /* (harmonics follow the part: a new one decides again) */:{db:role(stem)==='vocals'?0:-2};
   if(isOS(stem)&&old&&old.sample&&track==null){r.part.n=old.n;r.part.every=old.every;if((old.steps||[]).length)r.part.steps=old.steps.slice()}  // 🎲 swaps the sound, your placement stays
-  MX.slots[stem]=Object.assign(keep,r.part,{hk:'oct',ct:0,since:performance.now(),buf:null,_key:null,_next:null});rec.push(isOS(stem)?r.part.sample:r.part.track);if(rec.length>80)rec.splice(0,rec.length-80);try{localStorage.setItem('dcStemsRecent',JSON.stringify(MX.recent))}catch(e){}hpush(stem);
+  MX.slots[stem]=Object.assign(keep,r.part,{hk:'oct',ct:isOS(stem)?(r.part.ct||0):0,since:performance.now(),buf:null,_key:null,_next:null});rec.push(isOS(stem)?r.part.sample:r.part.track);if(rec.length>80)rec.splice(0,rec.length-80);try{localStorage.setItem('dcStemsRecent',JSON.stringify(MX.recent))}catch(e){}hpush(stem);
   if(pre_){const np=MX.slots[stem];api('api/stems/dealt',{pre:pre_,via}).then(x=>{if(x&&x.imp&&!np.imp)np.imp=x.imp}).catch(()=>{})}  // a prefetched deal is recorded once it plays (its id is kept with the next save)
   if(hit){const p=MX.slots[stem];p.buf=hit.buf;p.sub=hit.sub;p._hc=hit.hc;initHarm(stem);p._key=renderKey(p,MX.bpm,TR.semis(p.semis||0,p));p._playingLoop={track:p.track,bar0:p.bar0,n:p.n,k:p.k};startSrc(stem);draw()}  // it's playing already; sync only confirms
   await sync()}
@@ -4551,7 +4551,11 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  // the tab
  $('tabY').insertAdjacentHTML('afterend',`<button id="tabM" title="recombine drums, bass, vocals and the rest from different songs">🎛 Mashup</button>`);
  $('tabM').onclick=()=>{st.tab='M';render()};
- const _rM=render;render=function(...a){$('tabM').classList.toggle('on',st.tab==='M');if(st.tab!=='M'){TR.closeMenu();document.body.classList.remove('mash');if(MX._refit){MX._refit=false;if(typeof scheduleRefit==='function')scheduleRefit()}return _rM.apply(this,a)}
+ // a mashup left playing can be stopped from any tab
+ $('tabM').insertAdjacentHTML('afterend',`<button id="mxstopg" hidden title="stop the mashup that is playing">■ stop mashup</button>`);
+ $('mxstopg').onclick=e=>{e.stopPropagation();play(false);if(st.tab==='M')draw()};
+ function stopBtn(){const b=$('mxstopg');if(b)b.hidden=!(MX.on&&st.tab!=='M')}
+ const _rM=render;render=function(...a){$('tabM').classList.toggle('on',st.tab==='M');stopBtn();if(st.tab!=='M'){TR.closeMenu();document.body.classList.remove('mash');if(MX._refit){MX._refit=false;if(typeof scheduleRefit==='function')scheduleRefit()}return _rM.apply(this,a)}
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.id==='tabM'));try{localStorage.setItem('dcTab','M')}catch(e){}
   document.body.classList.add('wide','mash');['cats','subsBox','sbanner','tbanner'].forEach(id=>{if($(id))$(id).hidden=true});$('count').textContent='mashup';draw();
   if(MX.saved==null){MX.saved=[];refreshSaved().then(draw)}

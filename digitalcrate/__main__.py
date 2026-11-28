@@ -87,6 +87,8 @@ def main():
     sub.add_parser("status")
     ly = sub.add_parser("lyrics", help="transcribe the words in vocal samples (Whisper), for lyric search and wordless chops")
     ly.add_argument("--limit", type=int)
+    nt = sub.add_parser("notes", help="measure the notes and tuning of one-shot and pad samples, for Mashup's harmony fit")
+    nt.add_argument("--limit", type=int)
     rl = sub.add_parser("reloop", help="re-cut old loops onto Beat This downbeats, in place (dry run without --fix)")
     rl.add_argument("--fix", action="store_true"); rl.add_argument("--limit", type=int)
     tr = sub.add_parser("trash", help="deleted samples: how many and how much space; --empty deletes them for good")
@@ -335,6 +337,9 @@ def main():
         from .styles import run as styles
         styles(a.limit)
         print("TASK DONE", flush=True)
+    elif a.cmd == "notes":
+        from .notes import run as notes_run
+        notes_run(a.limit)
     elif a.cmd == "lyrics":
         from .lyrics import run as words
         words(a.limit)

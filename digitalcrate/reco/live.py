@@ -25,13 +25,16 @@ import numpy as np
 from .. import config as C
 
 SETTINGS = C.DATA_DIR / "reco" / "settings.json"
-CHOICES = dict(samples=("new", "old"), mashup=("new", "w0", "old"))
+CHOICES = dict(samples=("new", "old"), mashup=("new", "w0", "old"), fit=("new", "old"))
 ABOUT = dict(samples=dict(new="the shared taste model (reco/models/taste.py)",
                           old="the earlier blend: regression + trees + nearest favorite + song (taste.py)"),
              mashup=dict(new="the starting guesses (W0) + the shared taste of the stem's sound; parts you turned down "
                              "dealt less",
                          w0="the starting guesses (W0) alone; parts you turned down dealt less",
-                         old="the learned weights (stems.weights), as before the switch-over"))
+                         old="the learned weights (stems.weights), as before the switch-over"),
+             fit=dict(new="one-shots and pads: the sample's standing-out notes against each bar's chord tones and the "
+                          "key, the other one-shot and pad tracks counted, and tuned to the other tracks",
+                      old="one-shots and pads: the cosine of the sample's 12-note chroma and the bars'"))
 MIN_GAP = 30          # seconds between two refits (listening changes the evidence all the time)
 DISCOVER = "thompson per sample: mean + sd x N(0, 1), standardized as the score"
 SAMPLE_MODEL = "reco.taste"

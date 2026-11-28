@@ -396,11 +396,11 @@ def test_taste_and_activity_pages_render(site, browser):
         pg.wait_for_timeout(1500)
         if path == "taste":  # every recommender's measurement, and the switch between models
             pg.wait_for_selector("text=How well each recommender predicts you", timeout=60000)
-            assert pg.locator("[data-reco]").count() == 5
+            assert pg.locator("[data-reco]").count() == 7
             pg.click("[data-reco=mashup][data-val=w0]")
             pg.wait_for_selector("[data-reco=mashup][data-val=w0].on", timeout=60000)
             got = json.load(urllib.request.urlopen(site["base"] + "api/taste/explain", timeout=120))
-            assert got["settings"]["current"] == dict(samples="new", mashup="w0")
+            assert got["settings"]["current"] == dict(samples="new", mashup="w0", fit="new")
             pg.click("[data-reco=mashup][data-val=new]")
             pg.wait_for_selector("[data-reco=mashup][data-val=new].on", timeout=60000)
     pg.close()
@@ -3976,3 +3976,19 @@ def test_the_piece_list_keeps_its_place_when_a_piece_changes(site, page):
     page.wait_for_function("(CRATE.MX.slots.vocals.cut[11]||[])[3]===2")
     page.wait_for_timeout(300)
     assert abs(page.evaluate(f"document.querySelector('{box}').scrollTop") - top) < 4
+
+
+def test_a_mashup_left_playing_can_be_stopped_from_another_tab(site, page):
+    """Leaving the Mashup tab while it plays shows a stop button beside the tab; it stops the mashup and goes away."""
+    _mixer(site, page)
+    assert page.is_hidden("#mxstopg")
+    if not page.evaluate("CRATE.MX.on"):
+        page.click("#mxplay")
+    page.wait_for_function("CRATE.MX.on")
+    assert page.is_hidden("#mxstopg")                    # on the Mashup tab its own stop is right there
+    page.click("#tabS")
+    page.wait_for_selector("#mxstopg:not([hidden])")
+    assert page.evaluate("CRATE.MX.on")                  # still playing
+    page.click("#mxstopg")
+    page.wait_for_function("!CRATE.MX.on")
+    assert page.is_hidden("#mxstopg")

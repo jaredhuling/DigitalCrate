@@ -1197,8 +1197,9 @@ def log(kind, state, stem=None, skip=None):
 # slot's impression id and reports what happened to the part (reco.log.outcome). Written on a short busy timeout and
 # committed at once (a write lock held long blocks the app: grain.py); a failure is printed and the deal goes on.
 
-POLICY = 2  # the dealing rules' version: bump when pick / oneshot / pad / top_fits draw differently (2: the switch-over,
-            # policy.mashup says which scoring dealt: new / w0 / old)
+POLICY = 3  # the dealing rules' version: bump when pick / oneshot / pad / top_fits draw differently (2: the switch-over,
+            # policy.mashup says which scoring dealt: new / w0 / old; 3: the one-shot and pad fit from notes and chords,
+            # policy.fit says which: new / old)
 SHOWN = 40  # candidates kept per impression (the rest: their count and their total chance)
 _STASH = {}  # prefetched deals not heard yet: token -> (surface, record); written once the browser plays one
 
@@ -1416,6 +1417,123 @@ def cycle_harmony(state, n, lib=None):
     return H / (np.linalg.norm(H, axis=1, keepdims=True) + 1e-9)
 
 
+_SCALE = dict(major=(0, 2, 4, 5, 7, 9, 11), minor=(0, 2, 3, 5, 7, 8, 10))
+CHORD, SCALE, AVOID, OUT, LOOSE = 1.0, 0.25, 0.0, -1.0, -0.3  # what a note is worth against a bar (cycle_target)
+FIT_W = dict(old=4.0, new=2.5)  # the fit's weight in the dice's score (the new fit spreads wider than the old)
+
+
+def _sample_slots(state, skip=None):
+    """[(slot id, part)] of the one-shot and pad tracks that hold a sample."""
+    return [(sid, p) for sid, p in (state.get("slots") or {}).items()
+            if p and p.get("sample") and not str(p["sample"]).startswith("stem:") and sid != skip]
+
+
+def cycle_target(state, n, skip=None, lib=None, con=None):
+    """What each note is worth in each bar of an n-bar cycle, from what the other tracks play: (n, 12) weights, or
+    None when nothing pitched plays. A chord tone of the bar is worth 1 (the chords of the stem parts' own bars,
+    shifted as the parts are; and the notes that stand out in the other one-shot and pad tracks), another note of the
+    mixer's key a little, a note of the key a semitone above a chord tone nothing (it rubs), a note outside the key
+    counts against. skip: the track being chosen for.
+    Also -> the tuning the pitched parts share, in cents off the grid (None when their songs' tuning isn't known)."""
+    from . import notes as NT
+    from .songkeys import parse
+    lib = library() if lib is None else lib
+    con = con or _db()
+    target = target_key(state, skip=skip)
+    tones = [set() for _ in range(n)]
+    tune = []
+    known = NT.song_tuning(con)
+    for sid, stem, p in _parts(state, lib):
+        if stem not in PITCHED or sid == skip:
+            continue
+        m, k = lib[int(p["track"])], float(p.get("k") or 1)
+        semis, b0, pn = _semis(state, stem, p, lib, target), int(p["bar0"]), max(1, int(p.get("n") or 4))
+        chords = m.get("chords") or []
+        for j in range(n):
+            a = b0 + int((j % pn) * k)
+            for b in range(a, a + max(1, int(k))):
+                c = parse(chords[b]) if b < len(chords) else None
+                if c:
+                    tones[j] |= {(c[0] + iv + semis) % 12 for iv in ((0, 3, 7) if c[1] else (0, 4, 7))}
+                elif b < len(m["chroma"]):  # no chord known for the bar: its three strongest notes
+                    v = np.array(m["chroma"][b], float)
+                    tones[j] |= {(int(i) + semis) % 12 for i in np.argsort(-v)[:3]} if v.any() else set()
+        if int(p["track"]) in known and known[int(p["track"])][1] >= NT.STEADY:
+            tune.append(known[int(p["track"])][0] + float(p.get("ct") or 0))
+    got = NT.notes(con)
+    for sid, p in _sample_slots(state, skip):
+        if p["sample"] not in got:
+            continue
+        prof = np.roll(got[p["sample"]][0], int(p.get("semis") or 0) + int(p.get("off") or 0))
+        loud = {int(i) for i in np.where(prof >= max(0.2, 0.5 * prof.max()))[0]} if prof.any() else set()
+        bars_ = range(n) if p.get("hold") else {(int(st) // 16) % n for st in (p.get("steps") or [0])}
+        for j in bars_:
+            tones[j] |= loud
+    if not any(tones):
+        return None, None
+    scale = {(target[0] + iv) % 12 for iv in _SCALE[target[1]]} if target else None
+    W = np.zeros((n, 12))
+    for j, T in enumerate(tones):
+        for i in range(12):
+            if i in T:
+                W[j, i] = CHORD
+            elif scale is None:
+                W[j, i] = LOOSE
+            elif i not in scale:
+                W[j, i] = OUT
+            else:
+                W[j, i] = AVOID if (i - 1) % 12 in T else SCALE
+    cents = None
+    if tune:  # the circular mean: +45 and -45 cents are 10 apart, not 90
+        z = np.exp(2j * np.pi * np.array(tune) / 100).mean()
+        cents = float(np.angle(z) / (2 * np.pi) * 100)
+    return W, cents
+
+
+def _fit_samples(con, state, n, rows, ch, semis, slot=None):
+    """How well each sample's notes sit on each bar of the cycle -> (F (samples, n), cents to play each at, mode).
+    new (reco.live, fit): the share of the sample's standing-out notes on chord tones, less what falls outside the
+    key (cycle_target), from its fine-grained notes (notes.py; its 12-note chroma, sharpened, until it is measured);
+    0.5 when nothing pitched plays. A sample that sits steadily off the others' tuning comes with the cents that
+    bring it in (at least 8: less can't be heard).
+    old: the cosine of the sample's chroma and the bars' (cycle_harmony)."""
+    from .reco import live
+    mode = live.policy("fit")
+    cts = np.zeros(len(rows), int)
+    if mode == "old":
+        H = cycle_harmony(state, n)
+        F = np.full((len(rows), n), 0.5)
+        if H is not None:
+            for sft in np.unique(semis):
+                m = semis == sft
+                F[m] = np.roll(ch[m], int(sft), axis=1) @ H.T
+        return F, cts, mode
+    from . import notes as NT
+    got = NT.notes(con)
+    W, ctx = cycle_target(state, n, skip=slot, con=con)
+    P = np.maximum(ch - np.median(ch, axis=1, keepdims=True), 0)  # not measured yet: the chroma with its floor off
+    P = P / (P.sum(1, keepdims=True) + 1e-9)
+    unknown = 0
+    for i, r in enumerate(rows):
+        g = got.get(r["path"])
+        if g is None:
+            unknown += 1
+            continue
+        P[i] = g[0]
+        if g[2] >= NT.STEADY:
+            d = NT.apart(g[1], ctx or 0.0)
+            cts[i] = -int(round(d)) if abs(d) >= 8 else 0
+    if unknown:
+        NT.WANTED = True  # (the server measures them in the background: serve.py)
+    if W is None:
+        return np.full((len(rows), n), 0.5), cts, mode
+    F = np.zeros((len(rows), n))
+    for sft in np.unique(semis):
+        m = semis == sft
+        F[m] = np.roll(P[m], int(sft), axis=1) @ W.T
+    return np.clip(F, 0.0, 1.0), cts, mode
+
+
 def _with_song(con, O, sample, song):
     """The one-shot pool plus samples it leaves out: every sample cut from `sample`'s song (song: for "more from this
     song"), or just `sample` (one you chose yourself). -> (rows, their chromas)"""
@@ -1453,14 +1571,7 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=Non
         for i, r in enumerate(rows):
             if r["key_from"] != "none" and r["key"] in NOTES and r["category"] != "Percussion":
                 semis[i] = key_semis(dict(pc=NOTES.index(r["key"]), scale=r["scale"] or "major"), target)
-    H = cycle_harmony(state, n)
-    if H is None:
-        F = np.full((len(rows), n), 0.5)
-    else:
-        F = np.zeros((len(rows), n))
-        for sft in np.unique(semis):
-            m = semis == sft
-            F[m] = np.roll(ch[m], int(sft), axis=1) @ H.T
+    F, cts, fmode = _fit_samples(con, state, n, rows, ch, semis, slot)
     try:  # the taste scores as last fitted: a click never waits for a refit (that takes seconds)
         from .taste import cached_scores
         sc = cached_scores() or {}
@@ -1472,7 +1583,7 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=Non
     z = (t - np.nanmean(t)) / (np.nanstd(t) + 1e-9) if np.isfinite(t).any() else np.zeros(len(rows))
     z = np.clip(np.nan_to_num(z), -2, 2)  # your favorites score far above the rest: capped, or they'd be all you get
     best = F.argmax(1)
-    score = 4.0 * F.max(1) + 0.35 * z
+    score = FIT_W[fmode] * F.max(1) + 0.35 * z
     if path is not None:
         idx = [i for i, r in enumerate(rows) if r["path"] == path]
         if not idx:
@@ -1493,19 +1604,20 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=Non
     if rec is not None and not top:
         if path is not None:
             _sample_rec(rec, "oneshot", state, slot, n, target, rows, [k], [1.0], 0, score, F.max(1), z, semis,
-                        dict(model="stems.oneshot", version=POLICY, score="4 fit + 0.35 taste", draw=None))
+                        dict(model="stems.oneshot", version=POLICY, score=f"{FIT_W[fmode]:g} fit + 0.35 taste", fit=fmode, draw=None))
         else:
             rest = cand[np.argsort(-score[cand])[40:]]
             _sample_rec(rec, "oneshot", state, slot, n, target, rows, list(best40) + list(rest),
                         list(p / p.sum()) + [0.0] * len(rest), list(best40).index(k), score, F.max(1), z, semis,
-                        dict(model="stems.oneshot", version=POLICY, score="4 fit + 0.35 taste",
+                        dict(model="stems.oneshot", version=POLICY, score=f"{FIT_W[fmode]:g} fit + 0.35 taste", fit=fmode,
                              draw=dict(over=len(best40), score_temp=0.35)),
                         dict(avoid=len(avoid), excluded=int(len(rows) - len(cand))))
     def part(k):
         r = rows[k]
         return dict(stem="oneshot", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
                     sub=r["subtype"], cat=r["category"], dur=round(float(r["dur"]), 2), n=n, steps=[int(best[k]) * 16], every=1,
-                    off=0, semis=int(semis[k]), key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
+                    off=0, semis=int(semis[k]), ct=int(cts[k]),
+                    key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
                     fit=[round(float(v), 3) for v in F[k]],
                     why=dict(fit=round(float(F[k].max()), 3), taste=round(float(z[k]), 2)))
     if top and song:  # the rest of that sample's song, whatever its length (you asked for the song)
@@ -1557,12 +1669,7 @@ def pad(state, n=4, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
         for i, r in enumerate(rows):
             if r["key_from"] != "none" and r["key"] in NOTES:
                 semis[i] = key_semis(dict(pc=NOTES.index(r["key"]), scale=r["scale"] or "major"), target)
-    H = cycle_harmony(state, n)
-    F = np.full((len(rows), n), 0.5)
-    if H is not None:
-        for sft in np.unique(semis):
-            m = semis == sft
-            F[m] = np.roll(ch[m], int(sft), axis=1) @ H.T
+    F, cts, fmode = _fit_samples(con, state, n, rows, ch, semis, slot)
     try:
         from .taste import cached_scores
         sc = cached_scores() or {}
@@ -1575,7 +1682,7 @@ def pad(state, n=4, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
     z = np.clip(np.nan_to_num(z), -2, 2)
     holds = np.array([r["loop_q"] is not None for r in rows], float)
     own = np.array([r["category"] == "Pads & Atmospheres" for r in rows], float)  # (strings outnumber pads 3 to 1)
-    score = 4.0 * F.mean(1) + 0.35 * z + 0.3 * holds + 0.15 * own - 0.15 * np.abs(semis) / 6
+    score = FIT_W[fmode] * F.mean(1) + 0.35 * z + 0.3 * holds + 0.15 * own - 0.15 * np.abs(semis) / 6
     if path is not None:
         idx = [i for i, r in enumerate(rows) if r["path"] == path]
         if not idx:
@@ -1587,12 +1694,13 @@ def pad(state, n=4, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
             return None
         cand = np.where(ok)[0]
         if top:  # the best fits, in order (top_fits)
-            return [_pad_part(rows, int(i), n, semis, F, z, holds) for i in cand[np.argsort(-F.mean(1)[cand])[:top]]]
+            return [_pad_part(rows, int(i), n, semis, F, z, holds, cts) for i in cand[np.argsort(-F.mean(1)[cand])[:top]]]
         best60 = cand[np.argsort(-score[cand])[:60]]
         p = np.exp(-np.arange(len(best60)) / 20.0)  # by rank: it moves through the best sixty
         k = int(rng.choice(best60, p=p / p.sum()))
     if rec is not None:
-        pol = dict(model="stems.pad", version=POLICY, score="4 fit + 0.35 taste + 0.3 holds + 0.15 pad - 0.15 |semis|/6")
+        pol = dict(model="stems.pad", version=POLICY, fit=fmode,
+                   score=f"{FIT_W[fmode]:g} fit + 0.35 taste + 0.3 holds + 0.15 pad - 0.15 |semis|/6")
         if path is not None:
             _sample_rec(rec, "pad", state, slot, n, target, rows, [k], [1.0], 0, score, F.mean(1), z, semis,
                         dict(pol, draw=None))
@@ -1602,7 +1710,7 @@ def pad(state, n=4, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
                         list(p / p.sum()) + [0.0] * (len(order) - len(best60)), list(best60).index(k), score, F.mean(1),
                         z, semis, dict(pol, draw=dict(over=len(best60), rank_temp=20.0)),
                         dict(avoid=len(avoid), excluded=int(len(rows) - len(cand))))
-    return _pad_part(rows, k, n, semis, F, z, holds)
+    return _pad_part(rows, k, n, semis, F, z, holds, cts)
 
 
 def _sample_rec(rec, role, state, slot, n, target, rows, pool, probs, chosen, score, fit, z, semis, policy, extra=None):
@@ -1619,11 +1727,11 @@ def _sample_rec(rec, role, state, slot, n, target, rows, pool, probs, chosen, sc
         rec.clear()
 
 
-def _pad_part(rows, k, n, semis, F, z, holds):
+def _pad_part(rows, k, n, semis, F, z, holds, cts=None):
     r = rows[k]
     return dict(stem="pad", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
                 sub=r["subtype"], cat=r["category"], dur=round(float(r["dur"]), 2), n=n, steps=[0], every=1, off=0,
-                hold=True, fin=40, fout=350, semis=int(semis[k]),
+                hold=True, fin=40, fout=350, semis=int(semis[k]), ct=int(cts[k]) if cts is not None else 0,
                 key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
                 fit=[round(float(v), 3) for v in F[k]],
                 why=dict(fit=round(float(F[k].mean()), 3), taste=round(float(z[k]), 2), holds=bool(holds[k])))
@@ -1638,7 +1746,8 @@ def top_fits(role, state, slot=None, n=None, top=12, rec=None, song=None):
         cur = (state.get("slots") or {}).get(slot) or {}
         fn = pad if role == "pad" else oneshot
         nn = int(n or cur.get("n") or (4 if role == "pad" else 1))
-        out = (oneshot(state, nn, top=top, song=song) if song and role == "oneshot" else fn(state, nn, top=top)) or []
+        out = (oneshot(state, nn, top=top, song=song, slot=slot) if song and role == "oneshot"
+               else fn(state, nn, top=top, slot=slot)) or []
         for p in out:
             p["fitp"] = p["why"]["fit"]
         if rec is not None:
