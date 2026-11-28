@@ -93,8 +93,8 @@ Hover over the song for the full name and why that part was picked.
 - **Mining for Mashup too:** on the Processing page, **also prepare them for Mashup** keeps each mined song's stems
   as well (from the separation mining already makes: about 80 MB and a minute more a song). From the command line:
   `digitalcrate process … --mashup`.
-- **＋ new** starts a new mashup: a clean slate with a first combination dealt. It asks first if you have unsaved
-  changes. **Clear all** leaves the slate empty.
+- **＋ new** starts a new mashup: an empty slate, with the name cleared, to build up track by track (🎲 on a
+  track, or 🎲 all, deals when you want it). It asks first if you have unsaved changes.
 - **Tops** holds the hi-hat, ride and crash. Pick them with the Tops button in the song list. Drums plays the
   rest of the kit once a song has Tops. **digitalcrate stems** makes Tops for earlier songs first, adding about
   15 to 20 MB per song. Use `digitalcrate stems --tops-only` to prepare just those songs. Until then, Drums plays

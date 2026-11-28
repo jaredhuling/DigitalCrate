@@ -3582,15 +3582,15 @@ def test_tracks_open_on_their_loops_and_remember_the_view(site, page):
 
 
 def test_new_starts_a_fresh_mashup(site, page):
-    """＋ new: a clean slate with a first combination dealt; it asks first when there is unsaved work, in place."""
+    """＋ new: an empty slate, nothing dealt; it asks first when there is unsaved work, in place."""
     _mixer(site, page)
     page.fill("#mxname", "keeper"); page.dispatch_event("#mxname", "input")
-    before = page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s].since)")
     page.click("#mxnew")
     assert page.inner_text("#mxnew") == "sure?" and page.evaluate("CRATE.MX.name") == "keeper"
     page.click("#mxnew")
-    page.wait_for_function("CRATE.MX.name===''&&['drums','bass','vocals','other'].every(s=>CRATE.MX.slots[s]&&CRATE.MX.slots[s].buf)&&CRATE.MX.on", timeout=120000)
-    assert page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s].since)") != before
+    page.wait_for_function("CRATE.MX.name===''")
+    page.wait_for_timeout(1500)
+    assert page.evaluate("Object.keys(CRATE.MX.slots).length") == 0                 # nothing is dealt
     assert page.evaluate("CRATE.MX.snaps.length") == 0 and page.inner_text("#mxnew").strip() == "＋ new"
 
 
