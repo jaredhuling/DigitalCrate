@@ -660,7 +660,8 @@ class Handler(SimpleHTTPRequestHandler):
                                                 req.get("sections") or [], req.get("bars") or 8, req.get("reveal", True)))
                 if what == "best":
                     rec = {} if deal else None
-                    parts = SM.top_fits(req["role"], state, req.get("slot"), req.get("n"), req.get("top") or 12, rec=rec)
+                    parts = SM.top_fits(req["role"], state, req.get("slot"), req.get("n"), req.get("top") or 12, rec=rec,
+                                        song=req.get("song"))
                     return self._json(dict(parts=parts, imp=SM.deal(rec, "mashup.best_list", deal) if parts else None))
                 if what == "oneshot":
                     pad = req.get("kind") == "pad"

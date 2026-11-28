@@ -434,3 +434,20 @@ def test_the_log_reads_outcomes_and_the_summary_shows_the_new_surfaces(lib, caps
     m = src.masked({a})                                                             # the harness hides it like any label
     assert not m.execute("SELECT COUNT(*) FROM reco_outcomes").fetchone()[0]
     assert src.masked().execute("SELECT COUNT(*) FROM reco_outcomes").fetchone()[0] == 1
+
+
+def test_more_from_this_song_lists_the_rest_of_a_one_shots_song(mashup):
+    """A one-shot that fits: the other samples cut from its song, best fit first, loops left out, and each loadable
+    (also one the one-shot pool leaves out, like a long phrase)."""
+    stems, con = mashup
+    path, tid = con.execute("SELECT path, track_id FROM samples WHERE chroma IS NOT NULL AND parent_id IS NULL "
+                            "AND track_id IN (SELECT track_id FROM samples WHERE chroma IS NOT NULL GROUP BY 1 "
+                            "HAVING COUNT(*) > 2) LIMIT 1").fetchone()
+    out = stems.top_fits("oneshot", STATE, None, 1, 40, song=path)
+    same = {r[0] for r in con.execute("SELECT path FROM samples WHERE track_id=? AND chroma IS NOT NULL AND "
+                                      "parent_id IS NULL AND kind != 'loop' AND path != ?", (tid, path))}
+    assert out and {p["sample"] for p in out} <= same and len(out) == min(40, len(same))  # its song, not itself
+    fits = [p["fitp"] for p in out]
+    assert fits == sorted(fits, reverse=True)
+    assert all(stems.oneshot(STATE, 1, path=p["sample"])["sample"] == p["sample"] for p in out)
+    assert {p["sample"] for p in stems.top_fits("oneshot", STATE, None, 1, 12)} != same  # the ordinary list is untouched

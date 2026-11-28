@@ -3249,6 +3249,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
       <div class="trmenu">
         ${item('find', os ? 'Choose a sample' : 'Choose the song')}
         ${item('best', 'Best fits…')}
+        ${filled && p.sample && H.role(id) === 'oneshot' && !String(p.sample).startsWith('stem:') ? item('same', 'More from this song…') : ''}
         ${filled && !os ? item('alt', 'Other takes') : ''}
         ${filled && !os ? item('shot', 'Play it as a one-shot') : ''}
         ${filled && !os ? item('splice', 'Splice pieces…') : ''}
@@ -4141,12 +4142,12 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   return `<div class="mxsl2">${L.map(x=>`<div class="mxsong"><span class="mxsn" title="${esc(x.artist)} — ${esc(x.title)}"><b>${esc(x.artist)}</b> — ${esc(x.title)}</span><span class="sub">${Math.round(x.bpm)} bpm · ${x.key} · ${x.bars} bars</span><span>${STEMS.map(k=>x.stems.includes(k)?`<button class="tbtn" data-mxput="${k}:${x.track}" title="put its ${k} in a ${k} slot (its best-fitting bars)">${ICON[k]}</button>`:`<button class="tbtn" disabled title="no ${k} to speak of in this song">${ICON[k]}</button>`).join('')}</span></div>`).join('')||'<span class="sub">none yet: run “digitalcrate stems”</span>'}</div>`}
  // the best fits for a track, in order (the dice draws; this lists): click one to put it in
  function bestHTML(id){const B=MX.best;if(!B||B.id!==id)return'';const pc=v=>v==null?'':` <span class="sub">${Math.round(v*100)}%</span>`;
-  return `<div class="mxfind mxbest"><button class="tbtn mxfindx" data-mxbestx="1" title="close (Esc)">✕</button><b>${B.loading?'looking…':B.parts.length?`The ${B.parts.length} that fit best`:'nothing fits here'}</b>
+  return `<div class="mxfind mxbest"><button class="tbtn mxfindx" data-mxbestx="1" title="close (Esc)">✕</button><b>${B.loading?'looking…':B.parts.length?(B.song?`${B.parts.length} more from this song, best fit first`:`The ${B.parts.length} that fit best`):B.song?'nothing else was cut from this song':'nothing fits here'}</b>
    ${B.parts.length&&B.parts[0].fitp==null?'<span class="sub">(drums have no harmony: these are the best overall)</span>':'<span class="sub">by how well their notes sit on what the other tracks play</span>'}
    <select data-mxbestn="${id}" title="how many to list">${[8,12,20,40].map(v=>`<option value="${v}" ${v===(MX.bestN||12)?'selected':''}>top ${v}</option>`).join('')}</select>
    ${B.parts.map((p,k)=>`<button class="tbtn" data-mxbestpick="${id}:${k}" title="${p.sample?esc(p.sub||'')+' · '+p.dur+' s':'bars '+(p.bar0+1)+'–'+(p.bar0+TR.srcBars(p.n,p.k||1))}${p.semis?' · '+(p.semis>0?'+':'')+p.semis+' st':''}">${k+1}. ${esc(p.artist)} — ${esc(p.title)}${pc(p.fitp)}</button>`).join('')}</div>`}
- async function bestLoad(id){MX.best={id,parts:[],loading:true};draw();
-  try{const r=await api('api/stems/best',{role:role(id),slot:id,state:state(),top:MX.bestN||12,deal:'list'});if(MX.best&&MX.best.id===id)MX.best={id,parts:r.parts||[],imp:r.imp}}catch(e){MX.best=null;toast('mashup: '+e.message)}draw()}
+ async function bestLoad(id,song){MX.best={id,parts:[],loading:true,song:song||null};draw();  // song: a sample's path: the rest of its song
+  try{const r=await api('api/stems/best',{role:role(id),slot:id,state:state(),top:MX.bestN||12,deal:'list',song:song||undefined});if(MX.best&&MX.best.id===id)MX.best={id,parts:r.parts||[],imp:r.imp,song:song||null}}catch(e){MX.best=null;toast('mashup: '+e.message)}draw()}
  function findHTML(stem){const F=MX.find;if(!F||F.stem!==stem)return'';
   if(isOS(stem)){const q=(F.q||'').toLowerCase().trim(),lim=2*barLenM()+0.05,out=[];
    const padT=isPad(stem),PADC=['Pads & Atmospheres','Strings & Orchestral','Vocal Atmospheres'];
@@ -4389,6 +4390,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(ds.mxdel){const s=ds.mxdel;if(MX.slots[s]&&MX.slots[s].since&&(performance.now()-MX.slots[s].since)/1000<20)ev('remove',s);out('removed',s);retire(s);delete MX.slots[s];await sync();return}
   if(ds.mxfindx){MX.find=null;draw();return}
   if(ds.mxbestx){MX.best=null;draw();return}
+  if(ds.mxsame){const p=MX.slots[ds.mxsame];if(p&&p.sample){MX.find=null;await bestLoad(ds.mxsame,p.sample)}return}
   if(ds.mxbest){if(MX.best&&MX.best.id===ds.mxbest){MX.best=null;draw();return}MX.find=null;await bestLoad(ds.mxbest);return}
   if(ds.mxbestpick){const [id,k]=ds.mxbestpick.split(':'),p=MX.best&&MX.best.parts[+k];if(!p)return;await roll(id,false,p.sample||p.track,'best',{list:MX.best.imp??null,rank:+k});if(!MX.on)play(true);return}
   if(ds.mxfav||ds.mxnope){const p=MX.slots[ds.mxfav||ds.mxnope];if(!p||!p.sample)return;
@@ -4506,7 +4508,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    apply(id);  // reroute any echoes while the new part loads
    await roll(id,false,undefined,'role');if(MX.slots[id]&&MX.slots[id]._blank){retire(id);delete MX.slots[id];await sync()}return}
   if(t.id==='mxload'){const m=(MX.saved||[]).find(x=>x.name===t.value);if(!m)return;await openSaved(m);return}
-  if(ds.mxbestn){MX.bestN=+t.value;await bestLoad(ds.mxbestn);return}
+  if(ds.mxbestn){MX.bestN=+t.value;await bestLoad(ds.mxbestn,MX.best&&MX.best.song);return}
   if(ds.mxpcxf){const p=MX.slots[ds.mxpcxf];p.xf=+t.value;await setCut(ds.mxpcxf,cutOf(p));return}
   if(ds.mxpcb||ds.mxpcl||ds.mxpcs||ds.mxpcn){const [id,i]=(ds.mxpcb||ds.mxpcl||ds.mxpcs||ds.mxpcn).split(':'),cut=cutOf(MX.slots[id]);
    if(ds.mxpcb){const v=parseFloat(t.value);if(!Number.isFinite(v))return;cut[+i][0]=v-1}else if(ds.mxpcl)cut[+i][1]=+t.value;
@@ -4521,9 +4523,12 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   save()});
  L.addEventListener('keydown',e=>{if(st.tab!=='M'||e.target.id!=='mxq')return;if(e.key==='Enter'){const b=document.querySelector('.mxfind [data-mxsong]');if(b)b.click()}else if(e.key==='Escape'){MX.find=null;draw()}e.stopPropagation()});
  {let dr=null;const fr=(c,e)=>Math.max(0,Math.min(1,(e.clientX-c.getBoundingClientRect().left)/c.clientWidth));
+  const edge=(c,p,f)=>{const [a,b]=osTrim(p),px=9/c.clientWidth,da=Math.abs(f-a),db=Math.abs(f-b);return da<=px&&da<=db?'a':db<=px?'b':null};  // which edge of the piece is under the pointer (within 9 px)
   L.addEventListener('mousedown',e=>{const c=e.target.closest&&e.target.closest('canvas[data-mxtrim]');if(!c||st.tab!=='M')return;e.preventDefault();const id=c.dataset.mxtrim,p=MX.slots[id];if(!p||!p.buf)return;
-   const f=fr(c,e),[a,b]=osTrim(p),px=6/c.clientWidth,nearA=p.trim&&Math.abs(f-a)<=px,nearB=p.trim&&Math.abs(f-b)<=px;
-   dr={c,id,p,anchor:nearA&&(!nearB||Math.abs(f-a)<Math.abs(f-b))?b:nearB?a:f,moved:false,last:f,cur:nearA&&(!nearB||Math.abs(f-a)<Math.abs(f-b))?a:nearB?b:f}});
+   const f=fr(c,e),[a,b]=osTrim(p),g=edge(c,p,f);  // on an edge (the whole sample's ends too): that edge moves, the other stays
+   dr={c,id,p,anchor:g==='a'?b:g==='b'?a:f,moved:false,last:f,cur:g==='a'?a:g==='b'?b:f}});
+  // the pointer says what a drag will do: ↔ on an edge (it moves that edge), a cross elsewhere (it draws a new piece)
+  L.addEventListener('mousemove',e=>{if(dr||st.tab!=='M')return;const c=e.target.closest&&e.target.closest('canvas[data-mxtrim]'),p=c&&MX.slots[c.dataset.mxtrim];if(p)c.style.cursor=edge(c,p,fr(c,e))?'ew-resize':'crosshair'});
   window.addEventListener('mousemove',e=>{if(!dr)return;const raw=fr(dr.c,e);dr.cur=Math.max(0,Math.min(1,dr.cur+(raw-dr.last)*(e.shiftKey?0.1:1)));dr.last=raw;const f=dr.cur;  // shift: ten times finer
    dr.moved=true;dr.p.trim=[Math.min(dr.anchor,f),Math.max(dr.anchor,f)];osTrimDraw(dr.id,dr.p);const box=document.querySelector(`[data-mxwave="${dr.id}"]`);if(box)osWave(dr.id,dr.p,box)});
   window.addEventListener('mouseup',()=>{if(!dr)return;const {id,p,moved}=dr;dr=null;if(!moved)return;  // a plain click changes nothing (and mustn't redraw: a double-click needs the same canvas twice)

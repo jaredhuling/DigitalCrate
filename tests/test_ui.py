@@ -1667,6 +1667,17 @@ def test_mashup_one_shot_slot(site, page):
     page.mouse.up()
     tr = page.evaluate(f"CRATE.MX.slots['{sid}'].trim")
     assert abs(tr[0] - 0.2) < 0.01 and abs(tr[1] - 0.6) < 0.01
+    # on an edge the pointer shows ↔ and a drag moves that edge only; elsewhere it is a cross (a drag draws a new piece)
+    cur = lambda: page.locator(f'canvas.mxtrim.big[data-mxtrim="{sid}"]').evaluate("e=>getComputedStyle(e).cursor")
+    page.mouse.move(bb["x"] + bb["width"] * 0.45, bb["y"] + 40)
+    assert cur() == "crosshair"
+    page.mouse.move(bb["x"] + bb["width"] * 0.2 + 5, bb["y"] + 40)
+    assert cur() == "ew-resize"
+    page.mouse.down()
+    page.mouse.move(bb["x"] + bb["width"] * 0.3 + 5, bb["y"] + 40, steps=5)
+    page.mouse.up()
+    tr = page.evaluate(f"CRATE.MX.slots['{sid}'].trim")
+    assert abs(tr[0] - 0.3) < 0.01 and abs(tr[1] - 0.6) < 0.01                       # the right edge stayed
     dur = page.evaluate(f"CRATE.MX.slots['{sid}'].buf.duration")
     page.click(f'[data-mxnudge="{sid}:0:1"]')                        # the start, 5 ms later
     assert abs(page.evaluate(f"CRATE.MX.slots['{sid}'].trim[0]") - (tr[0] + 0.005 / dur)) < 1e-6

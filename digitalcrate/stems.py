@@ -1345,7 +1345,7 @@ def _oneshots(con):
     n = con.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     if _OS["n"] != n:
         rows = con.execute(r"""SELECT s.id, s.path, s.category, s.subtype, s.kind, s.dur, s.key, s.scale, s.key_from,
-                               s.chroma, t.artist, t.title FROM samples s JOIN tracks t ON t.id = s.track_id
+                               s.chroma, s.track_id, t.artist, t.title FROM samples s JOIN tracks t ON t.id = s.track_id
                                WHERE s.parent_id IS NULL AND s.path NOT LIKE '\_Reference%' ESCAPE '\'
                                AND s.chroma IS NOT NULL AND (s.kind = 'oneshot'
                                OR (s.category IN ('Vocals', 'Vocal Atmospheres') AND s.dur <= 8))""").fetchall()
@@ -1371,14 +1371,33 @@ def cycle_harmony(state, n, lib=None):
     return H / (np.linalg.norm(H, axis=1, keepdims=True) + 1e-9)
 
 
-def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
+def _with_song(con, O, sample, song):
+    """The one-shot pool plus samples it leaves out: every sample cut from `sample`'s song (song: for "more from this
+    song"), or just `sample` (one you chose yourself). -> (rows, their chromas)"""
+    have = {r["path"] for r in O["rows"]}
+    where = "s.track_id = (SELECT track_id FROM samples WHERE path = ?) AND s.kind != 'loop'" if song else "s.path = ?"
+    more = [dict(r) for r in con.execute(rf"""SELECT s.id, s.path, s.category, s.subtype, s.kind, s.dur, s.key, s.scale,
+                s.key_from, s.chroma, s.track_id, t.artist, t.title FROM samples s JOIN tracks t ON t.id = s.track_id
+                WHERE s.parent_id IS NULL AND s.path NOT LIKE '\_Reference%' ESCAPE '\' AND s.chroma IS NOT NULL
+                AND {where}""", (sample,)) if r["path"] not in have]
+    if not more:
+        return O["rows"], O["ch"]
+    c = np.array([json.loads(r["chroma"]) for r in more], float).reshape(len(more), 12)
+    c /= np.linalg.norm(c, axis=1, keepdims=True) + 1e-9
+    return O["rows"] + more, (np.vstack([O["ch"], c]) if len(O["rows"]) else c)
+
+
+def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=None, song=None):
     """A library sample for a one-shot slot with a cycle of n bars: drawn from the best by fit + taste (or `path`:
     the one you chose). Comes with the bar it fits best (its first hit goes there) and its fit to every bar.
-    rec: a dict to fill with what was on offer (deal())."""
+    rec: a dict to fill with what was on offer (deal()). song (with top): a sample's path: list the other samples cut
+    from its song instead, best fit first."""
     rng = rng or np.random.default_rng()
     con = _db()
     O = _oneshots(con)
     rows, ch = O["rows"], O["ch"]
+    if song or (path is not None and not any(r["path"] == path for r in rows)):
+        rows, ch = _with_song(con, O, song or path, bool(song))
     if not rows:
         return None
     n = max(1, int(n or 1))
@@ -1444,6 +1463,9 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=Non
                     off=0, semis=int(semis[k]), key=(r["key"] + ("m" if r["scale"] == "minor" else "")) if r["key_from"] != "none" else None,
                     fit=[round(float(v), 3) for v in F[k]],
                     why=dict(fit=round(float(F[k].max()), 3), taste=round(float(z[k]), 2)))
+    if top and song:  # the rest of that sample's song, whatever its length (you asked for the song)
+        tid = next((r["track_id"] for r in rows if r["path"] == song), None)
+        cand = np.array([i for i, r in enumerate(rows) if tid is not None and r["track_id"] == tid and r["path"] != song], int)
     if top:  # the best fits, in order (top_fits)
         return [part(int(i)) for i in cand[np.argsort(-F.max(1)[cand])[:top]]]
     return part(k)
@@ -1562,7 +1584,7 @@ def _pad_part(rows, k, n, semis, F, z, holds):
                 why=dict(fit=round(float(F[k].mean()), 3), taste=round(float(z[k]), 2), holds=bool(holds[k])))
 
 
-def top_fits(role, state, slot=None, n=None, top=12, rec=None):
+def top_fits(role, state, slot=None, n=None, top=12, rec=None, song=None):
     """The parts that fit the harmony playing best, in order (not a draw): for a stem track, each song's best-fitting
     bars; for a one-shot or pad track, library samples. Drums and Tops have no harmony: theirs are ranked by the
     overall score. -> [part with "fitp": 0..1]. rec: a dict to fill with the list as shown (a ranking: no chances)."""
@@ -1571,7 +1593,7 @@ def top_fits(role, state, slot=None, n=None, top=12, rec=None):
         cur = (state.get("slots") or {}).get(slot) or {}
         fn = pad if role == "pad" else oneshot
         nn = int(n or cur.get("n") or (4 if role == "pad" else 1))
-        out = fn(state, nn, top=top) or []
+        out = (oneshot(state, nn, top=top, song=song) if song and role == "oneshot" else fn(state, nn, top=top)) or []
         for p in out:
             p["fitp"] = p["why"]["fit"]
         if rec is not None:
