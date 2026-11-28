@@ -38,6 +38,7 @@ def _reco_live_isolated(tmp_path, monkeypatch):
     """The served models (reco/live.py) never reach a real library from a test: settings in a temporary file, no
     background fits (a test that wants a fit makes one with live.refit on its own database)."""
     from digitalcrate.reco import live
+    monkeypatch.setenv("DIGITALCRATE_NO_SLOT", "1")  # a test never waits on (or yields to) a real job that happens to be running
     live.reset()
     monkeypatch.setattr(live, "SETTINGS", tmp_path / "reco_settings.json")
     monkeypatch.setattr(live, "CHECK_EVERY", 1e12)
