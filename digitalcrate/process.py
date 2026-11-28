@@ -130,6 +130,7 @@ def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs"
     """Mine one song. pads_only: an already-mined song, looked at again for pads only; its samples stay, new pads
     are added (unless they sound like one it already has)."""
     t0 = time.time()
+    _columns()
     policy = row["policy"] or classify_track(row["artist"], row["genre"], row["path"])
     y = decode(row["path"])
     if y.shape[1] < C.SR * 8:
@@ -324,14 +325,10 @@ def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs"
             _via(con)
             con.execute("UPDATE samples SET via='pads' WHERE id=?", (sid,))
         if c.get("grain") is not None:
-            from .grain import _db as _gdb
-            _gdb()
             from .grain import penalty as _gp
             con.execute("UPDATE samples SET grain=?, quality_raw=? WHERE id=?",
                         (c["grain"], round(c["quality"] / _gp(c["grain"]), 3), sid))
         if c.get("chords"):
-            from .pads import _db as _pdb
-            _pdb()
             con.execute("UPDATE samples SET chords=?, pad_still=?, pad_steady=? WHERE id=?",
                         (c["chords"], c["pad_still"], c["pad_steady"], sid))
         n += 1
@@ -484,6 +481,27 @@ def reclassify():
         moved += 1
     con.commit()
     print(f"reclassified {moved}, dropped {dropped}")
+
+
+_COLUMNS = []
+
+
+def _columns():
+    """The columns a mined sample may fill (grain, chords...), added before the song's writes begin. They used to be
+    added on a second connection in the middle of them, which a new library answered with "database is locked"."""
+    if _COLUMNS:
+        return
+    from .grain import _db as gdb
+    from .pads import _db as pdb
+    for make in (gdb, pdb):
+        c = make()
+        c.commit()
+        c.close()
+    c = connect()
+    _via(c)
+    c.commit()
+    c.close()
+    _COLUMNS.append(1)
 
 
 def _via(con):

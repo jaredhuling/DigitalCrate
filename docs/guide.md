@@ -107,7 +107,8 @@ Hover over the song for the full name and why that part was picked.
   forward through its parts. **S** solos the track, **M** mutes it, and the volume slider resets to 0 dB on a double-click.
 - **⋯** opens the track's options. **Choose the song** opens a search and uses the song's best-fitting bars (✕, **Esc** or a
   click elsewhere closes it). **Best fits…** lists the parts that fit the harmony playing best, in order, with how well each fits
-  (the die draws from the good ones; this shows you the top 8 to 40): click one to hear it, and the next. **Other takes** goes through other
+  (the die draws from the good ones; this shows you the top 8 to 40): click one to hear it, and the next (it works for one-shot and pad tracks too). On a one-shot track, **More from this song…** lists the
+  other samples cut from the same song, best fit first, whatever their length (loops left out). **Other takes** goes through other
   stretches of the same song. **Splice pieces…** builds the part from pieces of its song played one after the other: set each
   piece's bar and length (whole bars; ½ and 1½ are in the menu, and 12.5 as a bar means the middle of bar 12), add
   one with **＋ piece** or by **⌥-clicking** the waveform (**⌥⇧** for a half bar), drag a block to reorder (or use ←), remove with ✕. A piece can play backwards (**rev**), take

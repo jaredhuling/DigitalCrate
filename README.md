@@ -57,8 +57,7 @@ models.
 - **Pads** hold one or two chords and loop seamlessly; **🎹 playable** turns one into a Simpler instrument tuned to
   its chord, with its chords as MIDI.
 - **Goes well with** lists samples that fit by key, tempo and sound; **⧉** plays a pair together.
-- **🎛 Mashup** (prototype) recombines drums, bass, vocals and the rest from different songs on one tempo and key,
-  learns which combinations you like, and blends from one snapshot of a combination to the next.
+- **🎛 Mashup** (prototype) builds a track from stems of different songs; see [Mashup](#mashup).
 - **💡 why this?** explains any recommendation; **🕘 recent actions** undoes anything.
 - Arrow keys preview as you move; drag any row straight into Live.
 
@@ -80,6 +79,24 @@ models.
   starts from any one hit.
 - **🥁 slice into pads** cuts a drum loop into hits you can re-sequence.
 - Export a Drum Rack plus a MIDI clip of the pattern.
+
+### Mashup
+
+**🎛 Mashup** (a prototype) builds a track out of stems from different songs. Each track plays one part (drums, tops,
+bass, vocals or other) from a song of yours, all on one tempo and key, up to 16 tracks. The **🎲** deals a part that
+fits what's playing, and learns from what you keep and throw out. Mine songs for it with `digitalcrate stems`, or tick
+**also prepare them for Mashup** when mining.
+
+- **Best fits…** lists a track's candidate parts in ranked order instead of a random deal.
+- **More from this song…** lists the other samples cut from a one-shot's song, best fit first.
+- **Splice pieces…** builds a part from pieces of its song: reorder, reverse, stretch, repeat, rests and crossfades.
+- **One-shot tracks** and **pad tracks** play library samples on a step grid, shifted to the key.
+- **Play it as a one-shot** turns any stem part into a one-shot track.
+- **📸 snapshots** keep a mix, and the **▶ play strip** blends from one to the next.
+- **+** and **−** rate a part on a track, and teach the dice for that part alone.
+- **⇩ Ableton** writes the mashup as a Live set.
+
+The [guide](docs/guide.md#mashup) has the detail.
 
 ### Chords
 
@@ -111,7 +128,9 @@ models.
   through a good find's channel, ✕ and adds teach the ranking, and once a day it brings you a few new finds by itself.
 - **A taste model that shows its work.** ★, ✕, replays, skips and listening time train it; **💡 why this?** shows
   what pushed a sample up or down and which of your favorites it's closest to. The **🧠 Taste page** reports its
-  honest held-out accuracy and lists the samples that would teach it the most.
+  honest held-out accuracy and lists the samples that would teach it the most. One shared model ranks samples
+  and informs the Mashup dice, and `digitalcrate reco eval` measures how well each recommender predicts you
+  ([plan](docs/plans/recommend.md)).
 - **Kits that sound recorded together.** **🔎 complete the kit** compares how hits were recorded, not
   what drum they are, so a kick, snare and hat from different songs sit together.
 - **✨ Suggested edits judged by your ears.** A dozen candidate edits (stretch, tape pitch, filters, your own AU/VST3

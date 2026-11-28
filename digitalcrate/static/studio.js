@@ -4561,7 +4561,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  async function addOneShot(i){const path=S[i][F_.path];if(S[i][F_.dur]>2*barLenM()+0.05){toast(`too long for a one-shot at ${MX.bpm} bpm (two bars at most)`);return}
   let id=MX.order.find(x=>isOS(x)&&!MX.slots[x]);if(!id){if(MX.order.length>=MAXT){toast(`the mashup is full (${MAXT} tracks)`);return}id='s'+Date.now().toString(36);MX.order.push(id);MX.roles[id]='oneshot'}
   await roll(id,true,path,'add');toast(MX.slots[id]?'added to Mashup as a one-shot: place its hits there':'that sample can\'t be a one-shot');save();draw()}
- window.CRATE.mxAddOneShot=addOneShot;
+ window.CRATE.mxAddOneShot=addOneShot;window.CRATE.osPlay=osPlay;
  const _selOS=select;select=function(i,from){_selOS(i,from);if(!SERVED||!S[i]||S[i][F_.dur]>8||S[i][F_.cat]==='Percussion'&&S[i][F_.kind]!=='oneshot')return;const xb=document.querySelector('#detail [data-xp]');
   if(xb&&!$('mxosadd'))xb.insertAdjacentHTML('afterend',`<button id="mxosadd" data-i="${i}" title="put it in the Mashup as a one-shot: it plays at the steps you choose, shifted to the mashup's key">✦ Mashup</button>`)};
  document.addEventListener('click',e=>{const b=e.target.closest('#mxosadd');if(b)addOneShot(+b.dataset.i)});

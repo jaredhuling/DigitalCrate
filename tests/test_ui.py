@@ -3643,6 +3643,15 @@ def test_one_shot_plays_backwards_and_in_part(site, page):
     page.click(f'[data-mxback="{sid}"]')
     assert page.evaluate(f"CRATE.MX.slots['{sid}'].back") is True and "dirty" in page.get_attribute("#mxsave", "class")
     assert page.evaluate("JSON.parse(localStorage.getItem('dcStems')).slots['%s'].back" % sid) is True
+    # what a reversed hit plays is the very piece the forward hit plays, sample for sample, backwards (trimmed too)
+    worst = page.evaluate("""id => { const p = CRATE.MX.slots[id], out = [];
+      for (const trim of [null, [0.2, 0.6]]) { p.trim = trim; const seg = back => { p.back = back; const q = CRATE.osPlay(p), sr = q.buf.sampleRate;
+          return q.buf.getChannelData(0).slice(Math.round(q.from * sr), Math.round((q.from + q.len) * sr)); };
+        const f = seg(false), r = seg(true); let d = Math.abs(f.length - r.length) > 1 ? 9 : 0;
+        for (let i = 0; i < Math.min(f.length, r.length) - 2; i++) d = Math.max(d, Math.abs(f[i] - r[r.length - 1 - i]));
+        out.push(d, f.length > 1000 ? 0 : 9); }
+      p.trim = null; return Math.max(...out); }""", sid)
+    assert worst < 0.02
 
 
 def test_a_part_is_spliced_from_pieces(site, page):
