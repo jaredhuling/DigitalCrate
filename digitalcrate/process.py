@@ -154,10 +154,11 @@ def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs"
                 pass
             elif int(row["id"]) in SM.library():
                 print("    Mashup: already prepared")
-            elif stems is None:
-                print("    Mashup: not prepared (the song wasn't separated: it has no drums to take out)")
-            else:
-                m = SM.prepare_track(con, row, have=dict(tk=tk, bars=bar_times, stems=stems))
+            elif not tk["tempo_ok"] or len(bar_times) < 17:
+                print("    Mashup: not prepared (no steady 4/4 to line up)")
+            else:  # mining leaves a song without drums whole; Mashup wants its parts all the same, so separate it here
+                m = SM.prepare_track(con, row, have=dict(tk=tk, bars=bar_times,
+                                                         stems=stems if stems is not None else models.separate(y)))
                 print("    Mashup: " + ("its stems are kept" if m else "not prepared (no steady 4/4 to line up)"))
         except Exception as e:
             print("    Mashup: failed:", str(e)[:120])
@@ -185,7 +186,11 @@ def process_track(con, row, separate_mode="auto", verbose=False, vocals="demucs"
             from . import sections as SEC
             if SEC.available():
                 secs = SEC.analyze(y, stems, name=f"t{row['id']}")
-                SEC.save(SEC._db(), row["id"], secs)
+                scon = SEC._db()
+                try:
+                    SEC.save(scon, row["id"], secs)
+                finally:
+                    scon.close()
                 cands = SEC.adjust(cands, secs)
         except Exception as e:
             print("    sections failed:", str(e)[:100])
@@ -428,10 +433,14 @@ def run(where_sql="1=1", params=(), separate_mode="auto", limit=None, reprocess=
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            con.execute("UPDATE tracks SET status='error', error=? WHERE id=?",
-                        (f"{e}\n{traceback.format_exc()[-800:]}", row["id"]))
-            con.commit()
             tqdm.write(f"  ERROR {row['path']}: {e}")
+            try:  # one song's failure (a busy database included) must not end the batch
+                con.rollback()
+                con.execute("UPDATE tracks SET status='error', error=? WHERE id=?",
+                            (f"{e}\n{traceback.format_exc()[-800:]}", row["id"]))
+                con.commit()
+            except Exception as e2:
+                tqdm.write(f"    (not recorded: {e2})")
     print(f"done: {total} samples written")
 
 

@@ -45,7 +45,7 @@ table{width:100%;border-collapse:collapse;font-size:13px}td{padding:4px 6px 4px 
     <div class="row"><label>Songs <input id="n" type="number" min="5" max="1000" value="200" style="width:80px"></label>
       <label class="sub"><input type="checkbox" id="words" checked> transcribe the words</label>
       <label class="sub"><input type="checkbox" id="build" checked> rebuild the library page when done</label>
-      <label class="sub" title="Mining cuts samples from a song. Mashup needs the whole song's stems (drums, bass, vocals, the rest), which this keeps as well: about 80 MB and a minute more a song. Songs without a steady 4/4, and ones with nothing to separate, are left out."><input type="checkbox" id="mashup"> also prepare them for Mashup</label>
+      <label class="sub" title="Mining cuts samples from a song. Mashup needs the whole song's stems (drums, bass, vocals, the rest), which this keeps as well: about 80 MB and a minute more a song. A song mining would leave whole (no drums to take out) is separated for Mashup too, about 2 minutes more. Songs without a steady 4/4 are left out."><input type="checkbox" id="mashup"> also prepare them for Mashup</label>
       <button id="preview">Preview</button><button class="go" id="start" disabled>Start</button></div>
     <div id="plan" class="plan" hidden></div>
   </section>

@@ -95,6 +95,7 @@ def _db():
 def save(con, track_id, secs):
     con.execute("INSERT OR REPLACE INTO sections(track_id, secs, model) VALUES (?,?,?)",
                 (track_id, json.dumps(secs), MODEL))
+    con.commit()  # (it used to be left open: the sections were lost, and the write lock could outlive the call)
 
 
 def by_track(con=None):

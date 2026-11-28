@@ -91,7 +91,9 @@ Hover over the song for the full name and why that part was picked.
   and a key for each stretch, and a part is shifted by the key of its own bars (the track shows it). Songs prepared
   earlier get this from `digitalcrate stems --chords-only` (about a second a song).
 - **Mining for Mashup too:** on the Processing page, **also prepare them for Mashup** keeps each mined song's stems
-  as well (from the separation mining already makes: about 80 MB and a minute more a song). From the command line:
+  as well (from the separation mining already makes: about 80 MB and a minute more a song; a song with no drums,
+  which mining leaves whole, is separated for Mashup too, about 2 minutes more; songs with no steady 4/4 are left
+  out). From the command line:
   `digitalcrate process … --mashup`.
 - **＋ new** starts a new mashup: an empty slate, with the name cleared, to build up track by track (🎲 on a
   track, or 🎲 all, deals when you want it). It asks first if you have unsaved changes.
