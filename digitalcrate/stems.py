@@ -747,15 +747,38 @@ def target_key(state, skip=None):
 
 def _chroma(m, bar0, n, semis, k=1):
     """The part's harmony per mixer bar: the song's per-bar chromas, paired up (k = 2) or repeated (k = 0.5)."""
-    c = np.array(m["chroma"][bar0:bar0 + src_bars(n, k)], float)
+    c = _chroma_all(m)[bar0:bar0 + src_bars(n, k)]
     if not len(c):
-        return c
+        return c.copy()
     if k == 2:
         c = np.array([c[i:i + 2].mean(0) for i in range(0, len(c), 2)])
         c /= np.linalg.norm(c, axis=1, keepdims=True) + 1e-9
     elif k == 0.5:
         c = np.repeat(c, 2, axis=0)[:n]
     return np.roll(c, semis, axis=1)
+
+
+_CHROMA = {}
+
+
+def _act_all(m, stem):
+    """A stem's per-bar activity as an array, made once (as _chroma_all)."""
+    src = m["act"][stem]
+    got = _CHROMA.get((m.get("track"), stem))
+    if got is None or got[0] is not src:
+        got = _CHROMA[m.get("track"), stem] = (src, np.array(src, float))
+    return got[1]
+
+
+def _chroma_all(m):
+    """A song's per-bar chromas as one array, made once (the dice reads a few bars of it thousands of times a roll).
+    Kept with the list it was made from, so a song prepared again is read again."""
+    src = m["chroma"]
+    got = _CHROMA.get(m.get("track"))
+    if got is None or got[0] is not src:
+        a = np.array(src, float)
+        got = _CHROMA[m.get("track")] = (src, a if a.ndim == 2 else a.reshape(0, 12))
+    return got[1]
 
 
 def still(m, bar0, n, k=1):
@@ -771,7 +794,11 @@ def still(m, bar0, n, k=1):
 def fit(a, b):
     """How well two parts' harmony agrees, 0..1: the mean cosine of their per-bar chromas after transposition, each
     looped to a common length. a, b: (meta, bar0, n, semis[, k])."""
-    ca, cb = _chroma(*a), _chroma(*b)
+    return _fit(_chroma(*a), _chroma(*b))
+
+
+def _fit(ca, cb):
+    """fit() of two parts' chromas."""
     if not len(ca) or not len(cb):
         return 0.0
     L = int(np.lcm(len(ca), len(cb)))
@@ -946,14 +973,17 @@ def best_k(m, bpm, stem):
     return (k, r) if lo <= r <= hi else None
 
 
-def features(stem, m, bar0, n, state, lib, taste, target, k=1, slot=None):
+def features(stem, m, bar0, n, state, lib, taste, target, k=1, slot=None, others=None):
     """[active, -|log stretch|, -|semitones|, harmony fit, like - dislike sound, still] of a candidate part here."""
     ns = src_bars(n, k)
-    act = float(np.mean(m["act"][stem][bar0:bar0 + ns]))
+    act = float(_act_all(m, stem)[bar0:bar0 + ns].mean())
     ratio = m["bpm"] / (float(state.get("bpm") or m["bpm"]) * k)
     semis = 0 if stem in DRUM_ROLES else key_semis(m, target, bar0, ns)
     fits = []
-    if stem in PITCHED:
+    if stem in PITCHED and others is not None:  # (the other pitched parts' chromas, worked out once by the caller)
+        mine = _chroma(m, bar0, n, semis, k)
+        fits = [_fit(mine, c) for c in others]
+    elif stem in PITCHED:
         for sid, s, p in _parts(state, lib):
             if sid != slot and s in PITCHED:
                 o = lib[int(p["track"])]
@@ -978,6 +1008,16 @@ def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_temp
     -> [(score, track, bar0, semis, x, k, score without the taste term)]"""
     ctx = stem in PITCHED and any(sid != slot and s_ in PITCHED for sid, s_, _ in _parts(state, lib))
     cands = []
+    others = [_chroma(lib[int(p["track"])], int(p["bar0"]), int(p["n"]), _semis(state, s, p, lib, target),
+                      float(p.get("k") or 1))
+              for sid, s, p in _parts(state, lib) if sid != slot and s in PITCHED] if stem in PITCHED else None
+    if callable(taste):  # one value a song and stem: asked once, not once a candidate
+        ask, heard = taste, {}
+
+        def taste(track, stem_):
+            if (track, stem_) not in heard:
+                heard[track, stem_] = ask(track, stem_)
+            return heard[track, stem_]
     for tid, m in lib.items():
         if stem not in m["stems"] or tid in skip or (only is not None and tid != only):
             continue
@@ -991,7 +1031,12 @@ def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_temp
         if ns > nb:
             continue
         step = 4 if ns >= 4 else ns
-        wins = [(float(np.mean(m["act"][stem][b:b + ns])), b) for b in range(0, nb - ns + 1, step)]
+        starts = np.arange(0, nb - ns + 1, step)
+        A = _act_all(m, stem)
+        if len(A) >= nb:  # every window's mean activity at once
+            wins = list(zip(A[starts[:, None] + np.arange(ns)].mean(1).tolist(), starts.tolist()))
+        else:
+            wins = [(float(np.mean(m["act"][stem][b:b + ns])), b) for b in range(0, nb - ns + 1, step)]
         for a, b in sorted(wins, reverse=True)[:per]:
             if a < 0.45 and only is None:
                 continue
@@ -999,7 +1044,7 @@ def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_temp
             for sh in (range(0, min(4, step)) if ctx else (0,)):
                 if b + sh + ns > nb:
                     break
-                x, semis, _ = features(stem, m, b + sh, n, state, lib, taste, target, k, slot)
+                x, semis, _ = features(stem, m, b + sh, n, state, lib, taste, target, k, slot, others)
                 sc = float(w @ np.array(x)) - 0.02 * sh  # the phrase start, unless a later bar clearly fits better
                 t_ = 0.0
                 if plus is not None:

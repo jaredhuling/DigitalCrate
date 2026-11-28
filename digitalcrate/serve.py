@@ -84,13 +84,39 @@ def _alive(pid):
         return True
 
 
+_STOPPED = set()
+
+
 def stop_job(jid):
     import os, signal
     j = _saved_jobs().get(jid)
     if j and _alive(j["pid"]):
-        os.kill(j["pid"], signal.SIGINT)  # the run stops between songs' work; unfinished songs stay unmined
+        # the run stops between songs' work; unfinished songs stay unmined. A second Stop on a job that is still
+        # there (it ignores the first: deep in a library call, or waiting) ends it outright.
+        os.kill(j["pid"], signal.SIGTERM if jid in _STOPPED else signal.SIGINT)
+        _STOPPED.add(jid)
         return True
     return False
+
+
+_PARSED = {}
+
+
+def _parse_log(txt):
+    import re
+    bars = re.findall(r"(\w+):\s+(\d+)%\|[^|]*\|\s*(\d+)/(\d+) \[([\d:]+)<([\d:?]+)", txt)
+    now = re.findall(r"^NOW (.+)$", txt, re.M)
+    made = re.findall(r"^  (.+?): (\d+) samples", txt, re.M)
+    m = re.search(r"done: (\d+) samples written", txt)
+    lines = [l for l in re.split(r"[\r\n]+", txt) if l.strip() and not re.search(
+        r"Warning|warn|redirects|Loading weights|\d+%\|", l)]
+    return dict(progress=[int(bars[-1][2]), int(bars[-1][3])] if bars else None,
+                elapsed=bars[-1][4] if bars else None, eta=bars[-1][5] if bars else None,
+                _now=now[-1] if now else None, songs=len(made),
+                samples=int(m.group(1)) if m else sum(int(x[1]) for x in made),
+                errors=txt.count("  ERROR "), building="BUILDING" in txt and "BUILD DONE" not in txt,
+                finished=bool(m) or "BUILD DONE" in txt or "INGEST DONE" in txt or "SCOUT DONE" in txt or "TASK DONE" in txt,
+                tail=lines[-8:])
 
 
 def activity():
@@ -100,22 +126,19 @@ def activity():
     out = []
     for jid, j in sorted(_saved_jobs().items(), reverse=True):
         f = Path(j["log"])
-        txt = f.read_text(errors="ignore") if f.exists() else ""
         running = _alive(j["pid"])
-        bars = re.findall(r"(\w+):\s+(\d+)%\|[^|]*\|\s*(\d+)/(\d+) \[([\d:]+)<([\d:?]+)", txt)
-        now = re.findall(r"^NOW (.+)$", txt, re.M)
-        made = re.findall(r"^  (.+?): (\d+) samples", txt, re.M)
-        m = re.search(r"done: (\d+) samples written", txt)
-        lines = [l for l in re.split(r"[\r\n]+", txt) if l.strip() and not re.search(
-            r"Warning|warn|redirects|Loading weights|\d+%\|", l)]
+        try:
+            st = f.stat()
+            sig = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            sig = None
+        got = _PARSED.get(jid)
+        if not got or got[0] != sig:  # a log is read and parsed again only when it has changed
+            got = _PARSED[jid] = (sig, _parse_log(f.read_text(errors="ignore") if sig else ""))
+        d = dict(got[1])
+        now = d.pop("_now")
         out.append(dict(id=jid, kind=j["kind"], target=j["target"], running=running, started=j.get("started"),
-                        progress=[int(bars[-1][2]), int(bars[-1][3])] if bars else None,
-                        elapsed=bars[-1][4] if bars else None, eta=bars[-1][5] if bars else None,
-                        now=now[-1] if now and running else None, songs=len(made),
-                        samples=int(m.group(1)) if m else sum(int(x[1]) for x in made),
-                        errors=txt.count("  ERROR "), building="BUILDING" in txt and "BUILD DONE" not in txt,
-                        finished=bool(m) or "BUILD DONE" in txt or "INGEST DONE" in txt or "SCOUT DONE" in txt or "TASK DONE" in txt,
-                        tail=lines[-8:]))
+                        now=now if running else None, **d))
     mine = {j["pid"] for j in _saved_jobs().values()}
     try:
         ps = subprocess.run(["ps", "-axo", "pid=,etime=,command="], capture_output=True, text=True).stdout

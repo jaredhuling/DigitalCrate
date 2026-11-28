@@ -50,6 +50,9 @@ def _slot(cmd):
 
 
 def main():
+    import signal
+    if signal.getsignal(signal.SIGINT) == signal.SIG_IGN:  # started from a server that itself ran in the background:
+        signal.signal(signal.SIGINT, signal.default_int_handler)  # Stop (an interrupt) would be ignored otherwise
     ap = argparse.ArgumentParser(prog="digitalcrate")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sc0 = sub.add_parser("scan")
