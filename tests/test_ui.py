@@ -3652,6 +3652,12 @@ def test_one_shot_plays_backwards_and_in_part(site, page):
         out.push(d, f.length > 1000 ? 0 : 9); }
       p.trim = null; return Math.max(...out); }""", sid)
     assert worst < 0.02
+    # a piece that ends at the sample's end: its reversed start is never a hair below 0 (rounding; starting there throws,
+    # which silenced every one-shot track)
+    low = page.evaluate("""id => { const p = CRATE.MX.slots[id]; p.back = true; let m = 0;
+      for (let i = 1; i < 400; i++) { p.trim = [i / 401, 1]; m = Math.min(m, CRATE.osPlay(p).from); }
+      p.trim = null; return m; }""", sid)
+    assert low == 0
 
 
 def test_a_part_is_spliced_from_pieces(site, page):

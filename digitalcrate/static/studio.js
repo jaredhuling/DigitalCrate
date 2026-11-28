@@ -3879,7 +3879,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  const osPlay=(p,dry=p.buf,warped=p.wbuf,frac=1)=>{let q;
   if(warped)q={buf:warped,from:0,len:warped.duration,rate:1,out:warped.duration};
   else{const rate=2**(TR.semis(p.off||0,p)/12),[a,b]=osTrim(p),d=dry.duration;q={buf:dry,from:a*d,len:(b-a)*d,rate,out:(b-a)*d/rate}}
-  if(p.back){q.from=q.buf.duration-q.from-q.len;q.buf=reversed(q.buf)}
+  if(p.back){q.from=Math.max(0,q.buf.duration-q.from-q.len);q.buf=reversed(q.buf)}  // (never below 0: rounding left it a hair negative for a piece ending at the sample's end, and starting there throws)
   if(frac<1){q.len*=frac;q.out*=frac}
   return q};
  // held: the hit lasts `hold` seconds (until the next hit), going round the sample's seamless loop if the library found
@@ -3900,7 +3900,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    if(!p._c){chain(id);apply(id)}const cyc=(p.n||1)*16;let k=p._next!=null?p._next:Math.ceil((now-MX.t0)/st-1e-6);
    for(;MX.t0+k*st<now+0.25;k++){if(k<0||Math.floor(k/cyc)%(p.every||1)||!p.steps.includes(k%cyc))continue;
     let hold=0;if(p.hold){const s0=k%cyc,later=p.steps.filter(x=>x>s0)[0];hold=((later!=null?later:Math.min(...p.steps)+cyc*(p.every||1))-s0)*st}
-    osLive.add(osHit(id,p,Math.max(now,MX.t0+k*st),(p.gate||{})[k%cyc]||1,hold))}
+    try{osLive.add(osHit(id,p,Math.max(now,MX.t0+k*st),(p.gate||{})[k%cyc]||1,hold))}catch(e){console.error('one-shot',id,e)}}  // one track's failed hit must not stop the others (or be retried forever)
    p._next=k})}
  function play(on){heard();MX.on=on;clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
   if(on){AC.resume();MX.t0=AC.currentTime+0.05;MX.order.forEach(id=>{if(MX.slots[id])MX.slots[id]._next=null});MX.order.forEach(startSrc);osT=setInterval(osTick,50);osTick()}else MX.order.forEach(s=>stopSrc(s));draw()}  // (draw starts the play lines)
