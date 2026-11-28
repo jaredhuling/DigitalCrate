@@ -1241,3 +1241,23 @@ def test_mining_can_keep_a_songs_stems_for_mashup(tmp_path, monkeypatch):
     assert json.loads((stems.DIR / "t7" / "meta.json").read_text())["separated"] is True
     # no steady 4/4: not prepared
     assert stems.prepare_track(None, dict(row, id=8), have=dict(have, tk=dict(have["tk"], tempo_ok=False))) is None
+
+
+def test_a_job_does_not_wait_for_itself(tmp_path, monkeypatch):
+    """A batch holds the jobs slot through its own lyrics step, whose breathe() waits while "a job you started" runs:
+    that job must not be the batch itself (it stalled three hours every 25 samples on a 16 GB Mac)."""
+    import fcntl, os, subprocess, sys
+    from digitalcrate import config as C, memguard as M
+    monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+    assert not M._job_running()                                           # no slot file at all
+    held = open(tmp_path / "slot-jobs.lock", "a+")
+    fcntl.flock(held, fcntl.LOCK_EX)
+    held.write(f"process (pid {os.getpid()})")
+    held.flush()
+    assert not M._job_running()                                           # held by this very process
+    other = ("import fcntl,sys;from digitalcrate import config as C, memguard as M;from pathlib import Path;"
+             "C.DATA_DIR=Path(sys.argv[1]);print(M._job_running())")
+    r = subprocess.run([sys.executable, "-c", other, str(tmp_path)], capture_output=True, text=True)
+    assert r.stdout.strip() == "True", r.stderr                           # anyone else sees a job running
+    held.close()
+    assert not M._job_running()

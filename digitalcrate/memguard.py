@@ -50,6 +50,11 @@ def _job_running():
     if not f.exists():
         return False
     with open(f, "a+") as fh:
+        import os
+        fh.seek(0)
+        m = re.search(r"pid (\d+)", fh.read())
+        if m and int(m.group(1)) == os.getpid():
+            return False  # this job holds the slot itself (a batch's own lyrics step must not wait for the batch)
         try:
             fcntl.flock(fh, fcntl.LOCK_SH | fcntl.LOCK_NB)
             fcntl.flock(fh, fcntl.LOCK_UN)
