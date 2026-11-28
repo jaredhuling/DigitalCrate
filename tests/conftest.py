@@ -31,3 +31,17 @@ def tone(freqs, secs=4.0, sr=SR):
     env = np.minimum(1, t / 0.05) * np.minimum(1, (secs - t) / 0.2)
     y = (0.3 * y * env).astype(np.float32)
     return np.stack([y, y])
+
+
+@pytest.fixture(autouse=True)
+def _reco_live_isolated(tmp_path, monkeypatch):
+    """The served models (reco/live.py) never reach a real library from a test: settings in a temporary file, no
+    background fits (a test that wants a fit makes one with live.refit on its own database)."""
+    from digitalcrate.reco import live
+    live.reset()
+    monkeypatch.setattr(live, "SETTINGS", tmp_path / "reco_settings.json")
+    monkeypatch.setattr(live, "CHECK_EVERY", 1e12)
+    monkeypatch.setattr(live, "_con", lambda: (_ for _ in ()).throw(RuntimeError("tests: no library")))
+    live._S["checked"] = 1e12
+    yield
+    live.reset()

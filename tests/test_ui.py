@@ -198,6 +198,30 @@ def test_library_loads_with_every_kind(page):
     assert "Percussion" in cats and len(cats) >= 2
 
 
+def test_the_served_rankings_are_logged_once(page, site):
+    """The "for you" and discover rankings the page was served: one impression each, not one per reload."""
+    import sqlite3
+    page.wait_for_function("TASTE.loaded", timeout=120000)
+    db = sqlite3.connect(site["lib"] / "_data" / "samples.sqlite")
+    q = "SELECT COUNT(*) FROM reco_impressions WHERE surface='samples.for_you'"
+    for _ in range(40):
+        try:
+            if db.execute(q).fetchone()[0]:
+                break
+        except sqlite3.OperationalError:  # no table yet
+            pass
+        page.wait_for_timeout(500)
+    n = db.execute(q).fetchone()[0]
+    assert n >= 1
+    page.evaluate("loadTaste()")                      # the same rankings again: nothing new
+    page.wait_for_timeout(3000)
+    assert db.execute(q).fetchone()[0] == n
+    pol = json.loads(db.execute("SELECT policy FROM reco_impressions WHERE surface='samples.for_you' ORDER BY id DESC")
+                     .fetchone()[0])
+    assert pol["model"] in ("reco.taste", "taste", "taste (new model not fitted yet)")
+    db.close()
+
+
 def test_play_shows_and_stop_hides_the_now_playing_bar(page):
     page.locator("#list .row [data-play]").first.click()
     page.wait_for_timeout(300)
@@ -370,6 +394,15 @@ def test_taste_and_activity_pages_render(site, browser):
     for path in ("taste", "activity", "setup"):
         pg.goto(site["base"] + path)
         pg.wait_for_timeout(1500)
+        if path == "taste":  # every recommender's measurement, and the switch between models
+            pg.wait_for_selector("text=How well each recommender predicts you", timeout=60000)
+            assert pg.locator("[data-reco]").count() == 5
+            pg.click("[data-reco=mashup][data-val=w0]")
+            pg.wait_for_selector("[data-reco=mashup][data-val=w0].on", timeout=60000)
+            got = json.load(urllib.request.urlopen(site["base"] + "api/taste/explain", timeout=120))
+            assert got["settings"]["current"] == dict(samples="new", mashup="w0")
+            pg.click("[data-reco=mashup][data-val=new]")
+            pg.wait_for_selector("[data-reco=mashup][data-val=new].on", timeout=60000)
     pg.close()
     assert not errors, errors
 
@@ -3774,6 +3807,81 @@ def test_tracks_are_rated_where_they_play(site, page):
     assert page.evaluate("document.documentElement.scrollWidth<=document.documentElement.clientWidth")   # nothing pushed off the side
 
 
+def _reco_db(site):
+    import sqlite3
+    con = sqlite3.connect(site["lib"] / "_data" / "samples.sqlite")
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def test_a_deal_is_recorded_and_so_is_what_became_of_it(site, page):
+    """Every part dealt has its impression (what else was on offer, each one's chance, the context), and the browser
+    reports what became of it with the seconds it was heard: here a re-roll, after a few seconds of listening; a muted
+    track hears nothing."""
+    from digitalcrate.reco import log as L
+    _mixer(site, page)
+    outs = []
+    page.on("request", lambda r: outs.extend(json.loads(r.post_data)["out"]) if r.url.endswith("/api/stems/outcome") else None)
+    page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.MX.slots[s].imp)", timeout=20000)
+    page.click('[data-mxmute="vocals"]')
+    old = page.evaluate("({imp:CRATE.MX.slots.bass.imp,track:CRATE.MX.slots.bass.track,bar0:CRATE.MX.slots.bass.bar0,n:CRATE.MX.slots.bass.n})")
+    con = _reco_db(site)
+    imp = next(i for i in L.impressions(con) if i["id"] == old["imp"])
+    con.close()
+    assert imp["surface"] == "mashup.dice" and imp["context"]["via"] == "all" and imp["context"]["slot"] == "bass"
+    assert imp["chosen"] == ("part", old["track"], "bass", old["bar0"], old["n"])
+    assert imp["context"]["bpm"] == 100 and imp["shown"] and imp["policy"]["model"] == "stems.pick"
+    assert sum(s["p"] for s in imp["shown"]) + imp["context"]["rest"]["p"] == pytest.approx(1.0)
+    t0 = time.time()
+    page.wait_for_timeout(3000)
+    page.click('[data-mxroll="bass"]')
+    page.wait_for_function(f"CRATE.MX.slots.bass.imp&&CRATE.MX.slots.bass.imp!=={old['imp']}", timeout=60000)
+    wall = time.time() - t0
+    page.wait_for_function("!CRATE.MX.slots.bass._loading", timeout=60000)
+    page.wait_for_timeout(700)                                       # (outcomes go out in batches)
+    rep = [o for o in outs if o["action"] == "replaced" and o["slot"] == "bass"]
+    assert len(rep) == 1 and rep[0]["imp"] == old["imp"] and rep[0]["by"] == "dice"
+    assert 2.0 <= rep[0]["secs"] <= wall + 0.5                       # heard, on the audio clock
+    assert page.evaluate("Object.entries(CRATE.MX.dw).filter(([k])=>k.startsWith('vocals|')).every(([k,d])=>d.s<0.5)")
+    con = _reco_db(site)
+    got = L.outcomes(con, imp=old["imp"])
+    new = next(i for i in L.impressions(con) if i["id"] == page.evaluate("CRATE.MX.slots.bass.imp"))
+    con.close()
+    assert [o["action"] for o in got] == ["replaced"] and got[0]["context"]["secs"] == rep[0]["secs"]
+    assert new["surface"] == "mashup.dice" and new["context"]["via"] == "dice"
+    # an undo brings the part back: neither part is judged (undone / restored, not replaced)
+    outs.clear()
+    page.evaluate("CRATE.mxUndo(-1)")
+    page.wait_for_function(f"CRATE.MX.slots.bass.imp==={old['imp']}", timeout=60000)
+    page.wait_for_timeout(700)
+    acts = {(o["action"], o["imp"]) for o in outs if o["slot"] == "bass"}
+    assert ("undone", new["id"]) in acts and ("restored", old["imp"]) in acts and not any(a == "replaced" for a, _ in acts)
+    page.evaluate("CRATE.mxPlay(false);localStorage.removeItem('dcStems')")
+
+
+def test_saving_twice_records_one_save_per_part(site, page):
+    """A re-save of the same combination is no new yes: one save per part per mix, in the old log and the new."""
+    _mixer(site, page)
+    page.wait_for_function("['drums','bass','vocals','other'].every(s=>CRATE.MX.slots[s].imp)", timeout=20000)
+    con = _reco_db(site)
+    count = lambda: con.execute("SELECT COUNT(*) FROM stem_events WHERE kind='save'").fetchone()[0]
+    n0 = count()
+    name = f"twice {time.time():.0f}"
+    page.fill("#mxname", name)
+    for _ in range(2):
+        page.evaluate("CRATE.MX.savedSig=null")
+        page.click("#mxsave")
+        page.wait_for_function("!CRATE.MX._saving&&CRATE.MX.savedSig===CRATE.mxSig()", timeout=20000)
+        assert count() - n0 == 4
+    from digitalcrate.stems import _mix_tag
+    rows = con.execute("SELECT imp, item FROM reco_outcomes WHERE action='saved' AND json_extract(context,'$.mix')=?",
+                       (_mix_tag(name),)).fetchall()
+    con.close()
+    imps = page.evaluate("['drums','bass','vocals','other'].map(s=>CRATE.MX.slots[s].imp)")
+    assert len(rows) == 4 and sorted(r["imp"] for r in rows) == sorted(imps)
+    page.evaluate("CRATE.mxPlay(false);localStorage.removeItem('dcStems')")
+
+
 def test_a_pad_track_holds_a_library_pad(site, page):
     """A Pad track: the dice deals a library pad that fits, held under the whole cycle (one hit, hold on, long fades);
     its search looks through pads; hold can be switched per track."""
@@ -3823,3 +3931,22 @@ def test_best_fits_lists_what_fits_in_order(site, page):
     page.click('[data-mxrow="drums"] [data-trmore]'); page.click('[data-mxrow="drums"] .trmenu [data-mxbest]')
     page.wait_for_function("CRATE.MX.best&&CRATE.MX.best.id==='drums'&&!CRATE.MX.best.loading", timeout=60000)
     assert "no harmony" in page.inner_text(".mxbest")
+
+
+def test_the_piece_list_keeps_its_place_when_a_piece_changes(site, page):
+    """With more pieces than fit, changing the last one doesn't jump the list back to the top."""
+    _mixer(site, page)
+    page.click('[data-mxrow="vocals"] [data-trmore]'); page.click('[data-mxrow="vocals"] .trmenu [data-mxsplice]')
+    page.wait_for_selector('[data-mxsplicebox="vocals"]')
+    page.select_option('[data-mxpcl="vocals:0"]', "1")
+    for i in range(1, 12):
+        page.click('[data-mxpcadd="vocals"]')
+        page.wait_for_function(f"CRATE.MX.slots.vocals.cut&&CRATE.MX.slots.vocals.cut.length==={i + 1}")
+    box = '[data-mxsplicebox="vocals"] .mxpcs'
+    assert page.evaluate(f"(e=>e.scrollHeight>e.clientHeight+40)(document.querySelector('{box}'))")
+    page.evaluate(f"(e=>e.scrollTop=e.scrollHeight)(document.querySelector('{box}'))")
+    top = page.evaluate(f"document.querySelector('{box}').scrollTop")
+    page.select_option('[data-mxpcs="vocals:11"]', "2")
+    page.wait_for_function("(CRATE.MX.slots.vocals.cut[11]||[])[3]===2")
+    page.wait_for_timeout(300)
+    assert abs(page.evaluate(f"document.querySelector('{box}').scrollTop") - top) < 4

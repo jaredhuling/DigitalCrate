@@ -32,7 +32,7 @@ details summary{cursor:pointer;color:var(--acc2)}
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let D=null,timer=null,audio=null,playing=null;const rated={};
 async function load(){try{D=await (await fetch('api/taste/explain')).json()}catch(e){$('app').innerHTML='<div class="card">The server isn\'t reachable.</div>';return}
- render();clearTimeout(timer);if(D.accuracy&&D.accuracy.measuring)timer=setTimeout(load,4000)}
+ render();clearTimeout(timer);if(D.accuracy&&D.accuracy.measuring||D.recommenders&&D.recommenders.running)timer=setTimeout(load,D.recommenders&&D.recommenders.running?15000:4000)}
 const pct=x=>Math.round(x*100)+'%';
 function render(){if(!D.ready){$('app').innerHTML='<div class="card">No samples yet.</div>';return}
  const A=D.accuracy||{},S=D.signals,L=D.learned||{},E=D.examples;
@@ -40,7 +40,7 @@ function render(){if(!D.ready){$('app').innerHTML='<div class="card">No samples 
  $('app').innerHTML=`
  <div class="grid"><div>
  <section class="card"><h2>How well it knows you</h2>
-  ${A.auc==null?`<div class="sub">${A.measuring?'Measuring… (about 15 seconds)':'Star about 10 samples and it can be measured.'}</div>`:`
+  ${A.auc==null?`<div class="sub">${A.measuring?(A.model==='reco.taste'?'Measuring… (a few minutes, in the background)':'Measuring… (about 15 seconds)'):'Star about 10 samples and it can be measured.'}</div>`:`
   <div class="big">${pct(A.auc)}<small>of the time it picks your favourite</small></div>
   <div class="sub" style="margin-top:8px">The honest test: the samples you've heard are split into five groups. For each group, everything you told it about those samples (★, ✕, listening) is hidden, the model learns from the rest, then it's shown pairs of one of the group's favourites and one it heard but you didn't star. This is how often it ranks the favourite higher. A coin flip gets 50%.</div>
   <div class="cmp"><span>your taste model</span><div class="hb"><i style="width:${A.auc*100}%"></i></div><b>${pct(A.auc)}</b>
@@ -67,8 +67,9 @@ function render(){if(!D.ready){$('app').innerHTML='<div class="card">No samples 
   ${wrongHTML(E)}
  </section>
  </div><div>
+ ${recosHTML()}
  <section class="card"><h2>What it has learned, in words</h2>
-  <div class="sub" style="margin-bottom:10px">Descriptions scored by the model, through CLAP, which places words and sounds in the same space. Read it as a hint, not a measurement.</div>
+  <div class="sub" style="margin-bottom:10px">Descriptions scored by the model, through CLAP, which places words and sounds in the same space. Read it as a hint, not a measurement.${L.from?` These come from ${esc(L.from)}; the rankings on this page are the model in use.`:''}</div>
   <div class="words"><div><div class="sub" style="margin-bottom:4px">leans toward</div>${words(L.words_up||[],'var(--ok)')}</div><div><div class="sub" style="margin-bottom:4px">leans away from</div>${words(L.words_down||[],'var(--bad)')}</div></div>
  </section>
  <section class="card"><h2>By category and kind</h2>
@@ -83,6 +84,23 @@ function render(){if(!D.ready){$('app').innerHTML='<div class="card">No samples 
  <section class="card"><h2>Its top picks you haven't heard</h2>${E.top.map(r=>exRow(r,true)).join('')}</section>
  </div></div>
  <div class="sub">Model: ${esc(D.model)}. It refits whenever you star, ✕ or play something.</div>`}
+const TASKN={sample_taste:'Samples: for you, discover, sets, kits',new_songs:'Samples from songs you never rated',mashup_part:'Mashup dice',edit_move:'Edit suggestions',pair:'Goes well with',scout:'Scout'};
+const SPLITN={sample:'by sample',song:'by song (songs it never saw)',forward:'forward in time (what came next)',source:'by source sample',video:'by video'};
+function recosHTML(){const R=D.recommenders||{},T=R.tasks||[],St=D.settings||{},cur=St.current||{},ch=St.choices||{},ab=St.about||{};
+ const f3=v=>v==null?'—':v.toFixed(3),ci=c=>c?` <span class="sub">[${c[0].toFixed(2)}, ${c[1].toFixed(2)}]</span>`:'';
+ const sw=Object.keys(ch).map(k=>`<div style="margin:4px 0"><span style="display:inline-block;width:70px">${esc(k)}</span>${ch[k].map(v=>`<button data-reco="${esc(k)}" data-val="${esc(v)}" class="${cur[k]===v?'on':''}" title="${esc((ab[k]||{})[v]||'')}">${esc(v)}</button>`).join(' ')} <span class="sub">${esc((ab[k]||{})[cur[k]]||'')}</span></div>`).join('');
+ const body=T.length?T.map(t=>`<div style="margin:12px 0 4px"><b>${esc(TASKN[t.task]||t.task)}</b> <span class="sub">· ${esc(t.about||'')} · ${esc(t.metric)}${t.when?' · measured '+new Date(t.when*1000).toLocaleDateString():''}${t.quick?' (quick)':''}</span></div>
+  ${t.splits.map(sp=>`<div class="sub" style="margin:4px 0 2px">${esc(SPLITN[sp.split]||sp.split)}${sp.n!=null?` · ${sp.n} examples (${sp.pos} yes, ${sp.neg} no)`:''}</div>
+   ${sp.insufficient?`<div class="sub">too little data: ${esc(sp.insufficient.replace(/^too little data to say anything: /,''))}</div>`:
+   `<div style="display:grid;grid-template-columns:minmax(0,1.4fr) 80px minmax(0,1.6fr) minmax(0,1.6fr);gap:2px 10px;font-size:13px">${(sp.rows||[]).map(r=>`<span>${esc(r.model)} <span class="sub">${esc(r.role)}</span></span><span class="sub">${esc(r.role)==='in use'?'●':''}</span><span>${f3(r.mean)}${ci(r.ci)}</span><span>${r.vs?`${r.vs.diff>=0?'+':''}${r.vs.diff.toFixed(3)}${ci(r.vs.ci)} <span class="sub">vs ${esc(t.reference)} · won ${r.vs.won}/${r.vs.of} folds</span>`:''}</span>`).join('')}</div>`}`).join('')}`).join('')
+  :'<div class="sub">Not measured yet.</div>';
+ return `<section class="card"><h2>How well each recommender predicts you</h2>
+  <div class="sub">Each recommender against held-out data (the harness: <code>digitalcrate reco eval</code>): a number is how often it ranks what you kept above what you passed over (0.5 is a coin flip), with its 95% interval, and how far ahead it is of the task's reference (the model that was in use before the switch-over). An interval that includes zero means the data can't tell them apart yet.</div>
+  ${body}
+  <div style="margin-top:10px"><button id="recoeval" ${R.running?'disabled':''}>${R.running?'measuring… (several minutes)':'measure again'}</button></div>
+  <h3 style="margin:16px 0 4px;font-size:14px">Which model deals</h3>${sw}
+  <div class="sub" style="margin-top:4px">Everything dealt or listed is logged with the model that dealt it, so the two can be compared later.</div>
+ </section>`}
 function wrongHTML(E){const miss=E.missed.filter(r=>r.pct<70),bad=E.wrong.filter(r=>r.pct>50);
  const lowest=E.missed.length?Math.min(...E.missed.map(r=>r.pct)):null;
  let h='<div class="sub" style="margin-bottom:6px">The number on the right is where it ranks a sample in your library (100 = its top pick). If the samples below have something in common, that\'s what it hasn\'t understood yet.</div>';
@@ -147,7 +165,9 @@ function bars(rows){return `<div class="w" style="grid-template-columns:150px 1f
 function exRow(r,rate){const st=rated[r.path];return `<div class="ex"><button class="play" data-p="${esc(r.path)}">${playing===r.path?'■':'▶'}</button>
  <div class="t"><b>${esc(r.sub||'')}</b> · ${esc(r.artist||'')} — ${esc(r.title||'')}${r.why?`<div class="sub">${esc(r.why)}</div>`:''}</div>
  <div><span class="pct" title="its score, as a percentile of your library">${r.pct}</span>${rate?`<button data-fav="${esc(r.path)}" data-id="${esc(r.id)}" class="${st==='fav'?'on':''}" title="★ favourite">★</button> <button data-no="${esc(r.path)}" data-id="${esc(r.id)}" class="no ${st==='no'?'on':''}" title="not for me">✕</button>`:''}</div></div>`}
-document.addEventListener('click',async e=>{const p=e.target.closest('[data-p]');if(p){const path=p.dataset.p;if(audio){audio.pause();audio=null}
+document.addEventListener('click',async e=>{const rb=e.target.closest('[data-reco]');if(rb){await fetch('api/reco/settings',{method:'POST',body:JSON.stringify({surface:rb.dataset.reco,value:rb.dataset.val})});load();return}
+ if(e.target.closest('#recoeval')){await fetch('api/reco/eval',{method:'POST',body:'{}'});load();return}
+ const p=e.target.closest('[data-p]');if(p){const path=p.dataset.p;if(audio){audio.pause();audio=null}
   if(playing===path){playing=null;render();return}playing=path;audio=new Audio('/'+path.split('/').map(encodeURIComponent).join('/'));audio.play();
   const t0=Date.now();audio.onended=audio.onpause=()=>{fetch('api/event',{method:'POST',body:JSON.stringify({path,type:'listen',value:Math.min(1,(Date.now()-t0)/1000/Math.max(.3,audio?audio.duration||1:1))})}).catch(()=>{});if(playing===path){playing=null;render()}};render();return}
  const f=e.target.closest('[data-fav]');if(f){const on=rated[f.dataset.fav]!=='fav';rated[f.dataset.fav]=on?'fav':null;

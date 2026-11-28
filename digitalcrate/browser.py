@@ -340,6 +340,7 @@ let TASTE={score:{},discover:{},vibe:{},disliked:new Set(),n:0};
 const byIds=(r,k)=>{const o={};if(!r.ids)return r[k]||{};r.ids.forEach((id,j)=>{const i=BYID.get(id);if(i!=null)o[S[i][F.path]]=r[k][j]});return o};
 async function loadTaste(){if(!SERVED)return;try{const [a,b]=await Promise.all([fetch('api/taste?ids=1').then(r=>r.json()),fetch('api/taste?recent=1&ids=1').then(r=>r.json())]);
  const first=!TASTE.loaded;
+ if(a.served)fetch('api/reco/served',{method:'POST',body:JSON.stringify({token:a.served})}).catch(()=>{});  // logged once: what "for you" and discover were served
  // what you're looking at, ranked before and after: "updated" only when the top of the list would really change
  const top=()=>{try{return st.tab==='S'?filtered().slice(0,30).join(','):''}catch(e){return''}},before=first?'':top();
  TASTE={loaded:true,score:byIds(a,'score'),discover:byIds(a,'discover'),vibe:byIds(b,'score'),disliked:new Set([...(a.disliked||[]),...TASTE.disliked]),n:a.n_labels||0};

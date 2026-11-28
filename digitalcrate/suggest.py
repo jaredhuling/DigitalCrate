@@ -157,11 +157,17 @@ def _clap_of(ys):
 
 
 class Critic:
-    """The live taste model, applied to audio that isn't in the library."""
+    """The live taste model, applied to audio that isn't in the library: the shared taste model when the switch says
+    samples: new and it is fitted (reco/live.py), else the earlier one (taste.py)."""
 
     def __init__(self, sample_path):
         from . import taste
-        taste.scores_payload(None)  # fit (or reuse the cached fit)
+        self.new = taste._new_fit()
+        self.path = sample_path
+        if self.new is not None and sample_path in self.new.pos:
+            return
+        self.new = None
+        taste._old_payload(None)  # fit (or reuse the cached fit)
         self.r = taste._FIT.get(None) or {}
         self.L = taste._library(taste._db())
         self.c = self.r.get("critic")
@@ -169,10 +175,13 @@ class Critic:
         self.meta = self.L["meta"].get(sample_path, {})
 
     def ok(self):
-        return self.c is not None and self.i is not None
+        return self.new is not None or (self.c is not None and self.i is not None)
 
     def score(self, E):
         """taste score (z units, like 'for you') of each embedding, as if it were this sample."""
+        if self.new is not None:
+            m, _ = self.new.t.score_like(E, self.path)
+            return (m - self.new.mu) / self.new.scale
         from . import taste
         fz, c = self.L["fz"], self.c
         X = np.stack([np.r_[fz(e, self.meta), self.L["extra"][self.i]] for e in E])

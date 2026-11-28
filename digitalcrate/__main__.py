@@ -144,6 +144,16 @@ def main():
     fr = sub.add_parser("firstrun", help="scan your music, find promising songs, mine a first batch, build (the setup page runs this)")
     fr.add_argument("--scout", type=int, default=400); fr.add_argument("--mine", type=int, default=25)
     sub.add_parser("taste", help="fit the taste model and report how well it predicts your ratings")
+    rc = sub.add_parser("reco", help="the recommendation harness: how well each surface's model predicts you (read-only)")
+    rcs = rc.add_subparsers(dest="reco_cmd", required=True)
+    rce = rcs.add_parser("eval", help="measure tasks on held-out data; results under _data/reco/runs")
+    rce.add_argument("--task", action="append", help="sample_taste, new_songs, mashup_part, edit_move, pair, scout (default: all)")
+    rce.add_argument("--model", action="append", help="only these models (the task's reference is always kept)")
+    rce.add_argument("--split", action="append", help="only these splits (e.g. sample, song, forward)")
+    rce.add_argument("--quick", action="store_true", help="one seed and fewer resamples")
+    rce.add_argument("--show", action="store_true", help="print the latest saved results without measuring")
+    rcl = rcs.add_parser("log", help="every past interaction, read from the existing tables")
+    rcl.add_argument("--summary", action="store_true", help="counts per surface and action")
     dr = sub.add_parser("drums", help="mine percussion: one-shots (incl. combined strikes) and loops")
     dr.add_argument("--artist", nargs="*", default=[]); dr.add_argument("--match", nargs="*", default=[])
     dr.add_argument("--top", type=int, help="N best drum tracks (acoustic genres, drums present; capped per album)")
@@ -238,6 +248,9 @@ def main():
     elif a.cmd == "taste":
         from .taste import fit
         fit(verbose=True)
+    elif a.cmd == "reco":
+        from .reco.eval import cli
+        cli(a)
     elif a.cmd == "drums":
         from .percussion import run as drun
         cl, pr = [], []

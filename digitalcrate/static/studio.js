@@ -258,6 +258,12 @@ async function liveCheck(force){if(!SERVED||(document.hidden&&!force))return 0;l
  if(['S','C','R','F'].includes(st.tab)){const m=document.querySelector('main'),y=m?m.scrollTop:0;render();if(m)m.scrollTop=y}
  return add.length}
 window.liveCheck=liveCheck;setInterval(liveCheck,60000);setTimeout(liveCheck,8000);
+// the "for you" and discover rankings the page was served are logged once it has them (reco/live.py: one impression
+// per ranking). A page built before this posts nothing itself: "last" is the server's most recent ranking.
+if(typeof loadTaste==='function'&&!String(loadTaste).includes('api/reco/served')){
+ const servedNow=()=>fetch('api/reco/served',{method:'POST',body:JSON.stringify({token:'last'})}).catch(()=>{});
+ const _loadT=loadTaste;loadTaste=async function(){const r=await _loadT.apply(this,arguments);if(SERVED)servedNow();return r};
+ let tries=0;const first=setInterval(()=>{if(TASTE.loaded||++tries>60){clearInterval(first);if(TASTE.loaded&&SERVED)servedNow()}},1000)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)liveCheck()});
 
 // ---------- drag samples out (into Live, Finder, anywhere that takes files) and ↗ show in Finder
@@ -351,7 +357,7 @@ async function whyShow(i){const box=$('whybox');if(!box)return;box.hidden=false;
   ${pa?`<div class="whybars">${[['the model',pa.model,'what it has learned from everything you rated: sound, type, quality, style'],['close to a like',pa.close,'how close it is to the single liked sample it most resembles'],['its song',pa.song,'how you rated the other samples cut from the same song']].map(([n,v,t])=>`<div title="${t}"><span>${n}</span><i style="--w:${Math.min(100,Math.abs(v)*16)}%" class="${v<0?'neg':''}"></i><span>${pn(v)}</span></div>`).join('')}</div>`:''}
   ${up.length?`<div>pulled up by <b>${up.map(x=>esc(x.what)).join(', ')}</b>${down.length?`; down by <b>${down.map(x=>esc(x.what)).join(', ')}</b>`:''}</div>`:''}
   ${(r.like=(r.like||[]).filter(x=>!GONE.has(byPath.get(x.path))).slice(0,3)).length?`<div>sounds closest to what you liked: ${r.like.map(x=>`${whyName(x.path)} <span class="sub">(${Math.round(x.sim*100)}%)</span>`).join(' · ')}</div>`:''}
-  <div class="sub">${songTxt}</div>`}
+  <div class="sub">${songTxt}</div>${r.note?`<div class="sub">${esc(r.note)}</div>`:''}`}
 document.addEventListener('click',e=>{if(!e.target.closest('#whybtn'))return;e.stopPropagation();const b=$('whybox');
  if(b&&!b.hidden){b.hidden=true;WHY_OPEN=false;return}WHY_OPEN=true;if(st.sel!=null)whyShow(st.sel)},true);
 
@@ -3703,11 +3709,11 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  function adopt(sv){const ids=sv.order&&sv.order.length?sv.order:[...new Set([...STEMS,...Object.keys(sv.slots||{})])];MX.order=ids;MX.roles=Object.fromEntries(ids.map(id=>[id,(sv.roles||{})[id]||((sv.slots||{})[id]||{}).stem||(STEMS.includes(id)?id:'other')]))}
  // undo: every saved change of the mixer is a step (a drag is one step); ⌘Z / ⌘⇧Z walk them
  const UN={u:[],r:[],cur:null,t:0,busy:false};
- function undoNote(J){if(UN.busy)return;const o=JSON.parse(J);delete o.savedSig;delete o.snapsOf;delete o.name;const k=JSON.stringify(o);
-  if(UN.cur===null){UN.cur=k;return}if(k===UN.cur)return;const now=performance.now();
+ function undoNote(J){if(UN.busy)return;const o=JSON.parse(J);delete o.savedSig;delete o.snapsOf;delete o.name;const k=JSON.stringify(o),bare=x=>x.replace(/,"imp":\d+/g,'');
+  if(UN.cur===null){UN.cur=k;return}if(k===UN.cur)return;if(bare(k)===bare(UN.cur)){UN.cur=k;return}const now=performance.now();  // (a deal's record id arriving is not a step)
   if(now-UN.t>600||!UN.u.length){UN.u.push(UN.cur);if(UN.u.length>100)UN.u.shift()}UN.t=now;UN.cur=k;UN.r=[]}
  const save=()=>{try{const J=JSON.stringify({v:5,sel:MX.snapSel??undefined,loose:MX.loose||undefined,bpm:MX.bpm,key:MX.key,name:MX.name||'',savedSig:MX.savedSig||null,snapsOf:MX.snapsOf||null,fx:MX.fx!==false,reverb:MX.reverb,master:{on:MX.mast.on},glue:{on:MX.glue.on},duck:MX.duck||{},snaps:MX.snaps||[],trans:MX.trans||[],order:MX.order,roles:MX.roles,slots:Object.fromEntries(MX.order.filter(s=>MX.slots[s]).map(s=>{const p=MX.slots[s];
-   return [s,{stem:role(s),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,bars:p.bars,why:p.why,artist:p.artist,title:p.title,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,semis:p.semis,steps:p.steps,every:p.every,trim:p.trim||null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,hold:p.hold||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,db:p.db||0,mute:!!p.mute,lock:!!p.lock,eq:p.eq||[0,0,0],dly:p.dly||0,dt:p.dt||'1/8',fb:p.fb??0.35,eqOn:p.eqOn!==false,dlyOn:p.dlyOn!==false,rev:p.rev||0,revOn:p.revOn!==false,harm:p.harm==null?null:BLEND.harmAmt(p),hup:p.hup||undefined,legacyLoop:p.legacyLoop||undefined,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined}]}))});localStorage.setItem('dcStems',J);undoNote(J)}catch(e){}};
+   return [s,{stem:role(s),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,bars:p.bars,why:p.why,artist:p.artist,title:p.title,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,semis:p.semis,steps:p.steps,every:p.every,trim:p.trim||null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,hold:p.hold||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,db:p.db||0,mute:!!p.mute,lock:!!p.lock,eq:p.eq||[0,0,0],dly:p.dly||0,dt:p.dt||'1/8',fb:p.fb??0.35,eqOn:p.eqOn!==false,dlyOn:p.dlyOn!==false,rev:p.rev||0,revOn:p.revOn!==false,harm:p.harm==null?null:BLEND.harmAmt(p),hup:p.hup||undefined,legacyLoop:p.legacyLoop||undefined,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined,imp:p.imp||undefined}]}))});localStorage.setItem('dcStems',J);undoNote(J)}catch(e){}};
  const sig=(v=5,legacyShape=false)=>JSON.stringify({bpm:MX.bpm,key:MX.key||'',fx:MX.fx!==false,reverb:[MX.reverb.type,MX.reverb.decay],duck:BLEND.duckSig(MX,v<4?['bass']:undefined,v>=5),...(MX.mast.on?{}:{master:{on:false}}),...(MX.glue.on?{}:{glue:{on:false}}),
   snaps:MX.snaps||[],trans:MX.trans||[],slots:MX.order.map(id=>{
    const p=MX.slots[id];
@@ -3895,7 +3901,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
     let hold=0;if(p.hold){const s0=k%cyc,later=p.steps.filter(x=>x>s0)[0];hold=((later!=null?later:Math.min(...p.steps)+cyc*(p.every||1))-s0)*st}
     osLive.add(osHit(id,p,Math.max(now,MX.t0+k*st),(p.gate||{})[k%cyc]||1,hold))}
    p._next=k})}
- function play(on){MX.on=on;clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
+ function play(on){heard();MX.on=on;clearInterval(osT);osLive.forEach(x=>{try{x.stop()}catch(e){}});osLive.clear();
   if(on){AC.resume();MX.t0=AC.currentTime+0.05;MX.order.forEach(id=>{if(MX.slots[id])MX.slots[id]._next=null});MX.order.forEach(startSrc);osT=setInterval(osTick,50);osTick()}else MX.order.forEach(s=>stopSrc(s));draw()}  // (draw starts the play lines)
  // Ask for the current parts in parallel. Only the latest sync may swap audio into a slot.
  const cutKey=p=>p&&p.cut&&p.cut.length?p.cut.map(c=>(c[0]==null?'_':c[0])+'+'+c[1]+(c[2]?'r':'')+(c[3]&&c[3]!==1?'s'+c[3]:'')+(c[4]>1?'x'+c[4]:'')).join(',')+(p.xf?'~'+p.xf:''):'';
@@ -4075,17 +4081,30 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  function leaving(stem){const p=MX.slots[stem];if(!p||!p.since||!MX.on)return;const secs=(performance.now()-p.since)/1000;
   if(isOS(stem)){if(p.sample&&!String(p.sample).startsWith('stem:')&&secs>30&&typeof sendEvent==='function')sendEvent(p.sample,'listen',1,p.sid);return}
   if(secs<6)ev('reroll',stem);else if(secs>30)ev('kept',stem)}
- function ev(kind,stem){api('api/stems/event',{kind,stem:stem||null,state:state()}).then(r=>{MX.rated=r.rated;const el=$('mxrated');if(el)el.textContent=ratedTxt()}).catch(()=>{})}
+ function ev(kind,stem){if(kind==='snap'&&stem)out('snapped',stem);api('api/stems/event',{kind,stem:stem||null,state:state()}).then(r=>{MX.rated=r.rated;const el=$('mxrated');if(el)el.textContent=ratedTxt()}).catch(()=>{})}
+ // what became of each dealt part (stems.outcomes; the verbs are in reco/log.py), tied to the deal's record (p.imp, the
+ // impression the server wrote when it dealt the part) and with the seconds it was heard in that slot: playing, not
+ // muted, not soloed away, on the audio clock (a sleeping machine hears nothing). Sent in batches; dropped if it fails.
+ MX.dw={};let oqT=0;const OQ=[],HEARD=[30,60,120,300,600];
+ const dwKey=(id,p)=>id+'|'+(p.imp||[p.track,p.sample].join(':'));
+ function heard(){const t=AC.currentTime,dt=MX._dwT==null?0:t-MX._dwT;MX._dwT=t;if(!(dt>0)||!MX.on||!MX.dw)return;const solo=MX.order.some(s=>MX.slots[s]&&MX.slots[s].solo);
+  MX.order.forEach(id=>{const p=MX.slots[id];if(!has(p)||!p.buf||p.mute||(solo&&!p.solo))return;const k=dwKey(id,p),d=MX.dw[k]||(MX.dw[k]={s:0,k:0});d.s+=dt})}
+ const oRec=(a,id,p,x)=>{const d=MX.dw[dwKey(id,p)],R=p.stem||role(id);return Object.assign({imp:p.imp||null,slot:id,role:R,part:p.sample?{sample:p.sample}:{track:p.track,stem:R,bar0:p.bar0,n:p.n,k:p.k||1},action:a,secs:Math.round((d?d.s:0)*10)/10},x||{})};
+ function out(a,id,x,p){p=p||MX.slots[id];if(!has(p))return;heard();OQ.push(oRec(a,id,p,x));clearTimeout(oqT);oqT=setTimeout(oFlush,400)}
+ function oFlush(beacon){clearTimeout(oqT);if(!OQ.length)return;const o=OQ.splice(0);
+  if(beacon===true&&navigator.sendBeacon){try{navigator.sendBeacon('api/stems/outcome',new Blob([JSON.stringify({out:o})],{type:'application/json'}))}catch(e){}return}api('api/stems/outcome',{out:o}).catch(()=>{})}
+ setInterval(()=>{heard();MX.order.forEach(id=>{const p=MX.slots[id],d=has(p)&&MX.dw[dwKey(id,p)];if(d)while(d.k<HEARD.length&&d.s>=HEARD[d.k])out('heard',id,{value:HEARD[d.k++]})})},1000);
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')oFlush(true)});  // (what is queued goes out even if the page is closing)
  const ratedTxt=()=>MX.rated>=12?`recommendations learned from ${MX.rated} ratings`:`learning: ${MX.rated}/12 ratings before it adapts (👍 👎, what you keep and what you throw out)`;
  // each slot remembers the parts it has held: ↶ goes back to one you liked after trying something else, ↷ forward again
- const snap=(id,p)=>({stem:role(id),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,legacyLoop:!!p.legacyLoop,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined,artist:p.artist,title:p.title,bars:p.bars,why:p.why,alt:p.alt||null,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,steps:(p.steps||[]).slice(),every:p.every,trim:p.trim?p.trim.slice():null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,hold:p.hold||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit});
+ const snap=(id,p)=>({stem:role(id),track:p.track,bar0:p.bar0,n:p.n,k:p.k||1,cut:p.cut&&p.cut.length?p.cut.map(c=>c.slice()):undefined,xf:p.cut&&p.cut.length&&p.xf||undefined,off:p.off||0,ct:p.ct||0,legacyLoop:!!p.legacyLoop,kit:p.kit||undefined,hk:p.hk==='oct'?'oct':undefined,cond:p.cond||undefined,artist:p.artist,title:p.title,bars:p.bars,why:p.why,alt:p.alt||null,sample:p.sample,sid:p.sid,sub:p.sub,cat:p.cat,dur:p.dur,key:p.key,steps:(p.steps||[]).slice(),every:p.every,trim:p.trim?p.trim.slice():null,warp:p.warp||0,fin:p.fin||0,fout:p.fout||0,back:p.back||undefined,hold:p.hold||undefined,gate:p.gate&&Object.keys(p.gate).length?{...p.gate}:undefined,fit:p.fit,imp:p.imp});
  MX.hist={};MX.hpos={};
  const sameHistoryPart=(a,b)=>a&&a.stem===b.stem&&a.track===b.track&&a.sample===b.sample&&
   a.bar0===b.bar0&&a.n===b.n&&a.k===b.k&&a.legacyLoop===b.legacyLoop;
  function hpush(id){const p=MX.slots[id];if(!has(p))return;const H=MX.hist[id]||(MX.hist[id]=[]),at=MX.hpos[id]??-1,sn=snap(id,p);
   if(sameHistoryPart(H[at],sn)&&(H[at].cond||0)===(sn.cond||0)&&H[at].hk===sn.hk)return;H.length=at+1;H.push(sn);if(H.length>40)H.shift();MX.hpos[id]=H.length-1}
- async function hgo(id,d){const H=MX.hist[id]||[],at=(MX.hpos[id]??-1)+d;if(at<0||at>=H.length)return;const p=MX.slots[id]||(MX.slots[id]={db:-2});
-  MX.hpos[id]=at;delete p._hkRequest;delete p.hk;delete p._viewKey;Object.assign(p,H[at],{since:performance.now(),harm:null,hup:undefined,buf:null,_hc:null,_key:null,_next:null,wbuf:null,_wkey:null,_warpRequest:null});if(MX.roles[id]!==H[at].stem&&H[at].stem)MX.roles[id]=H[at].stem;await sync()}
+ async function hgo(id,d){const H=MX.hist[id]||[],at=(MX.hpos[id]??-1)+d;if(at<0||at>=H.length)return;out('replaced',id,{by:'history'});const p=MX.slots[id]||(MX.slots[id]={db:-2});
+  MX.hpos[id]=at;delete p._hkRequest;delete p.hk;delete p._viewKey;Object.assign(p,H[at],{since:performance.now(),harm:null,hup:undefined,buf:null,_hc:null,_key:null,_next:null,wbuf:null,_wkey:null,_warpRequest:null});if(MX.roles[id]!==H[at].stem&&H[at].stem)MX.roles[id]=H[at].stem;out('restored',id,{by:'history'});await sync()}
  // 🎲 without the wait: once the mixer settles, each unlocked stem slot's next part is picked, rendered and decoded in
  // the background. A click then swaps it in at once, if nothing it was chosen against has changed since (the other
  // slots' parts, the tempo, the key); otherwise the click asks the server as before.
@@ -4094,25 +4113,28 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  async function prefetch(id){const p=MX.slots[id];if(isOS(id)||!p||p.track==null||p.lock)return;
   const stem=role(id),bpm=MX.bpm,sig=ctxSig(id),cur=MX.pre[id];if(cur&&cur.sig===sig)return;
   const tok=MX.pre[id]={sig,ready:false};
-  try{const r=await api('api/stems/pick',{stem,slot:id,state:state(),avoid:(MX.recent[id]||[]).slice(-60),n:p.n});if(!r.part||MX.pre[id]!==tok)return;
+  try{const r=await api('api/stems/pick',{stem,slot:id,state:state(),avoid:(MX.recent[id]||[]).slice(-60),n:p.n,deal:'pre'});if(!r.part||MX.pre[id]!==tok)return;
    const q=r.part,rr=await api('api/stems/render',{track:q.track,stem,bar0:q.bar0,n:q.n,k:q.k||1,bpm,semis:TR.semis(q.semis||0,q),cond:q.cond});
    if(rr.whole)q.kit=true;
    const buf=await decode(url(rr.url)),hc=await BLEND.harmMeasure(buf,'oct');
    if(MX.pre[id]===tok)Object.assign(tok,{part:q,buf,hc,sub:rr.sub||0,ready:true})}catch(e){if(MX.pre[id]===tok)delete MX.pre[id]}}
  let preT=0;const prefetchSoon=()=>{clearTimeout(preT);preT=setTimeout(async()=>{if(st.tab!=='M')return;for(const id of MX.order)await prefetch(id)},350)};
- async function roll(stem,quiet,track){const old=MX.slots[stem];if(old&&old.lock&&track==null)return;leaving(stem);
+ // via: how it was asked for (dice, all, down, new, find, best, role, add): the deal's record says so; with: {list, rank} of a best-fits pick
+ async function roll(stem,quiet,track,via,with_){via=via||(track==null?'dice':'find');const old=MX.slots[stem];if(old&&old.lock&&track==null)return;leaving(stem);
   const rec=MX.recent[stem]||(MX.recent[stem]=[]);
   const pre=track==null&&!isOS(stem)?MX.pre[stem]:null,hit=pre&&pre.ready&&pre.sig===ctxSig(stem)?pre:null;delete MX.pre[stem];
-  let r;try{r=hit?{part:hit.part}:isOS(stem)?await api('api/stems/oneshot',Object.assign({state:state(),kind:isPad(stem)?'pad':undefined,n:old&&old.sample?old.n:isPad(stem)?4:1,avoid:rec.slice(-12)},track==null?{}:{path:track})):await api('api/stems/pick',{stem:role(stem),slot:stem,state:state(),avoid:rec.slice(-60),n:old?old.n:null,track:track==null?null:track})}catch(e){toast('mashup: '+e.message);return}
+  let r;try{r=hit?{part:hit.part}:isOS(stem)?await api('api/stems/oneshot',Object.assign({state:state(),kind:isPad(stem)?'pad':undefined,n:old&&old.sample?old.n:isPad(stem)?4:1,avoid:rec.slice(-12),slot:stem,deal:via},with_||{},track==null?{}:{path:track})):await api('api/stems/pick',Object.assign({stem:role(stem),slot:stem,state:state(),avoid:rec.slice(-60),n:old?old.n:null,track:track==null?null:track,deal:via},with_||{}))}catch(e){toast('mashup: '+e.message);return}
   if(!r.part){if(!quiet)toast(isOS(stem)?'no one-shot found: the library has no short samples that fit':`no ${role(stem)} part fits this tempo${PITCHED.has(role(stem))?' and key':''}: try another tempo, or prepare more songs`);return}
+  if(has(old))out('replaced',stem,{by:via});const pre_=r.part.pre;delete r.part.pre;
   if(has(old)&&!(MX.hist[stem]||[]).length)hpush(stem);  // what was there before the first roll can be gone back to as well
   stopSrc(stem);const keep=old?{db:old.db,mute:old.mute,solo:old.solo,eq:old.eq,dly:old.dly,dt:old.dt,fb:old.fb,eqOn:old.eqOn,dlyOn:old.dlyOn,rev:old.rev,revOn:old.revOn,_c:old._c,_v:old._v,_viewMode:old._viewMode,_preset:old._preset}  /* (harmonics follow the part: a new one decides again) */:{db:role(stem)==='vocals'?0:-2};
   if(isOS(stem)&&old&&old.sample&&track==null){r.part.n=old.n;r.part.every=old.every;if((old.steps||[]).length)r.part.steps=old.steps.slice()}  // 🎲 swaps the sound, your placement stays
   MX.slots[stem]=Object.assign(keep,r.part,{hk:'oct',ct:0,since:performance.now(),buf:null,_key:null,_next:null});rec.push(isOS(stem)?r.part.sample:r.part.track);if(rec.length>80)rec.splice(0,rec.length-80);try{localStorage.setItem('dcStemsRecent',JSON.stringify(MX.recent))}catch(e){}hpush(stem);
+  if(pre_){const np=MX.slots[stem];api('api/stems/dealt',{pre:pre_,via}).then(x=>{if(x&&x.imp&&!np.imp)np.imp=x.imp}).catch(()=>{})}  // a prefetched deal is recorded once it plays (its id is kept with the next save)
   if(hit){const p=MX.slots[stem];p.buf=hit.buf;p.sub=hit.sub;p._hc=hit.hc;initHarm(stem);p._key=renderKey(p,MX.bpm,TR.semis(p.semis||0,p));p._playingLoop={track:p.track,bar0:p.bar0,n:p.n,k:p.k};startSrc(stem);draw()}  // it's playing already; sync only confirms
   await sync()}
- async function rollAll(){const pr={drums:0,tops:1,other:2,bass:3,vocals:4,oneshot:5,pad:6};  // 'other' before bass and vocals: it sets the key they fit to
-  for(const s of MX.order.slice().sort((a,b)=>pr[role(a)]-pr[role(b)]))if(!(MX.slots[s]&&MX.slots[s].lock))await roll(s,true);if(!MX.on&&MX.order.some(s=>has(MX.slots[s])))play(true)}
+ async function rollAll(via){const pr={drums:0,tops:1,other:2,bass:3,vocals:4,oneshot:5,pad:6};  // 'other' before bass and vocals: it sets the key they fit to
+  for(const s of MX.order.slice().sort((a,b)=>pr[role(a)]-pr[role(b)]))if(!(MX.slots[s]&&MX.slots[s].lock))await roll(s,true,undefined,via||'all');if(!MX.on&&MX.order.some(s=>has(MX.slots[s])))play(true)}
  const why=p=>{const w=p.why;if(!w)return'';return `\n\nwhy this part: active ${Math.round(w.active*100)}% · stretched ${Math.round((Math.exp(-w.stretch)-1)*100)}% · shifted ${-w.shift} st · fits the harmony ${Math.round(w.fit*100)}% · harmony still ${Math.round((w.still??0.5)*100)}%${w.sound?` · like your liked sounds ${w.sound>0?'+':''}${w.sound.toFixed(2)}`:''}`};
  // every prepared song, with a button per stem to put it in a slot
  function songsHTML(){const L=(MX.songs||[]).slice().sort((a,b)=>(a.artist+a.title).localeCompare(b.artist+b.title));
@@ -4124,7 +4146,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    <select data-mxbestn="${id}" title="how many to list">${[8,12,20,40].map(v=>`<option value="${v}" ${v===(MX.bestN||12)?'selected':''}>top ${v}</option>`).join('')}</select>
    ${B.parts.map((p,k)=>`<button class="tbtn" data-mxbestpick="${id}:${k}" title="${p.sample?esc(p.sub||'')+' · '+p.dur+' s':'bars '+(p.bar0+1)+'–'+(p.bar0+TR.srcBars(p.n,p.k||1))}${p.semis?' · '+(p.semis>0?'+':'')+p.semis+' st':''}">${k+1}. ${esc(p.artist)} — ${esc(p.title)}${pc(p.fitp)}</button>`).join('')}</div>`}
  async function bestLoad(id){MX.best={id,parts:[],loading:true};draw();
-  try{const r=await api('api/stems/best',{role:role(id),slot:id,state:state(),top:MX.bestN||12});if(MX.best&&MX.best.id===id)MX.best={id,parts:r.parts||[]}}catch(e){MX.best=null;toast('mashup: '+e.message)}draw()}
+  try{const r=await api('api/stems/best',{role:role(id),slot:id,state:state(),top:MX.bestN||12,deal:'list'});if(MX.best&&MX.best.id===id)MX.best={id,parts:r.parts||[],imp:r.imp}}catch(e){MX.best=null;toast('mashup: '+e.message)}draw()}
  function findHTML(stem){const F=MX.find;if(!F||F.stem!==stem)return'';
   if(isOS(stem)){const q=(F.q||'').toLowerCase().trim(),lim=2*barLenM()+0.05,out=[];
    const padT=isPad(stem),PADC=['Pads & Atmospheres','Strings & Orchestral','Vocal Atmospheres'];
@@ -4242,6 +4264,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  // open a saved combination (also: back to it as saved, dropping what you changed since)
  function clearAll(){MX.loose=null;MX.order.forEach(retire);MX.slots={};MX.snaps=[];MX.trans=[];MX.snapSel=null;MX.snapsOf=null;MX.duck={};MX.info=null;MX.name='';MX.savedSig=null}
  async function openSaved(m){
+  MX.order.forEach(id=>out('left',id,{by:'open'}));
   if(MX.on)play(false);
   MX.order.forEach(retire);
   const sv=JSON.parse(JSON.stringify(m.state));
@@ -4255,7 +4278,9 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  const dbv=v=>(v>0?'+':'')+(+v||0).toFixed(1)+' dB';
  // (replacing the list blurs a focused field, whose change handler may ask for another draw: that one waits its turn)
  let drawing=false,drawAgain=false;
- function draw(){if(drawing){drawAgain=true;return}drawing=true;try{drawNow()}finally{drawing=false}if(drawAgain){drawAgain=false;draw()}
+ function draw(){if(drawing){drawAgain=true;return}drawing=true;const pcs=document.querySelector('.mxpcs'),pcTop=pcs?pcs.scrollTop:0;  // the piece list keeps its place: a change redraws it
+  try{drawNow()}finally{drawing=false}
+  if(pcTop){const el=document.querySelector('.mxpcs');if(el)el.scrollTop=pcTop}if(drawAgain){drawAgain=false;draw()}
   if(MX.splice)requestAnimationFrame(()=>spliceDraw(MX.splice))}
  function drawNow(){const L=$('list');if(st.tab!=='M'||!L)return;if(BLEND.pbDraw(L))return;const I=MX.info||{},fit=I.fit,restoreFocus=TR.retainFocus(L);
   if(MX.n===0){L.innerHTML=`<div class="empty">No songs are prepared for Mashup yet.<br>Run <code>digitalcrate stems</code> (about 2 minutes a song): it separates the sources of your favorites plus some random songs.</div>`;return}
@@ -4351,26 +4376,27 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   }
   if(t.id==='mxclear'){const ns=(MX.snaps||[]).length;  // a clean slate: the snapshot strip goes too (it used to stay, and tag along into the next combination)
    if(ns&&!(MX._clr&&Date.now()-MX._clr<4000)){MX._clr=Date.now();draw();toast(`this also clears ${ns===1?'the snapshot':'the '+ns+' snapshots'}: click “sure?” to clear all`);setTimeout(()=>{if(MX._clr&&Date.now()-MX._clr>=3900){MX._clr=0;draw()}},4000);return}  // (kept on MX: a redraw between the two clicks mustn't forget the first)
-   MX._clr=0;clearAll();save();draw();return}
+   MX._clr=0;MX.order.forEach(id=>out('removed',id,{by:'clear'}));clearAll();save();draw();return}
   // a new mashup: a clean slate (asking first if there is unsaved work or a strip of snapshots), dealt and playing
   if(t.id==='mxnew'){const lose=dirty(),ns=(MX.snaps||[]).length;
    if((lose||ns)&&!(MX._new&&Date.now()-MX._new<4000)){MX._new=Date.now();draw();toast(`${lose?'unsaved changes will be lost':'this clears the snapshots'}: click “sure?” to start a new mashup`);setTimeout(()=>{if(MX._new&&Date.now()-MX._new>=3900){MX._new=0;draw()}},4000);return}
-   MX._new=0;clearAll();save();draw();await rollAll();if(!MX.on)play(true);return}
+   MX._new=0;MX.order.forEach(id=>out('removed',id,{by:'new'}));clearAll();save();draw();await rollAll('new');if(!MX.on)play(true);return}
   if(ds.mxalt){const id=ds.mxalt,p=MX.slots[id],key=[p.track,p.n,role(id),MX.bpm].join('|');
    if(!p._alts||p._altk!==key){try{p._alts=(await api('api/stems/alts',{state:state(),slot:id})).alts;p._altk=key}catch(err){toast('mashup: '+err.message);return}}
    const A=p._alts||[];if(A.length<2){toast('no other good stretch of this in the song');return}
-   const k=(Math.max(0,A.findIndex(a=>a.bar0===p.bar0))+1)%A.length,nx=A[k];p.bar0=nx.bar0;p.k=nx.k||1;if(nx.why)p.why=nx.why;
+   const k=(Math.max(0,A.findIndex(a=>a.bar0===p.bar0))+1)%A.length,nx=A[k];out('replaced',id,{by:'alt'});p.bar0=nx.bar0;p.k=nx.k||1;if(nx.why)p.why=nx.why;
    delete p._hkRequest;p.cond=nx.cond;p.alt=[k+1,A.length];delete p.legacyLoop;delete p._viewKey;p.ct=0;p.since=performance.now();p.harm=null;delete p.hup;hpush(id);await sync();return}
-  if(ds.mxdel){const s=ds.mxdel;if(MX.slots[s]&&MX.slots[s].since&&(performance.now()-MX.slots[s].since)/1000<20)ev('remove',s);retire(s);delete MX.slots[s];await sync();return}
+  if(ds.mxdel){const s=ds.mxdel;if(MX.slots[s]&&MX.slots[s].since&&(performance.now()-MX.slots[s].since)/1000<20)ev('remove',s);out('removed',s);retire(s);delete MX.slots[s];await sync();return}
   if(ds.mxfindx){MX.find=null;draw();return}
   if(ds.mxbestx){MX.best=null;draw();return}
   if(ds.mxbest){if(MX.best&&MX.best.id===ds.mxbest){MX.best=null;draw();return}MX.find=null;await bestLoad(ds.mxbest);return}
-  if(ds.mxbestpick){const [id,k]=ds.mxbestpick.split(':'),p=MX.best&&MX.best.parts[+k];if(!p)return;await roll(id,false,p.sample||p.track);if(!MX.on)play(true);return}
+  if(ds.mxbestpick){const [id,k]=ds.mxbestpick.split(':'),p=MX.best&&MX.best.parts[+k];if(!p)return;await roll(id,false,p.sample||p.track,'best',{list:MX.best.imp??null,rank:+k});if(!MX.on)play(true);return}
   if(ds.mxfav||ds.mxnope){const p=MX.slots[ds.mxfav||ds.mxnope];if(!p||!p.sample)return;
+   out(ds.mxfav?'starred':'nope',ds.mxfav||ds.mxnope,{value:(ds.mxfav?FAV.has(p.sample):TASTE.disliked.has(p.sample))?0:1});
    if(ds.mxfav)await toggleFav(p.sample,p.sid,`${p.artist||''} — ${p.title||''}${p.sub?' · '+p.sub:''}`);else toggleDislike(p.sample,p.sid);
    setTimeout(draw,60);return}
-  if(ds.mxpart){const [id,v]=ds.mxpart.split(':'),p=MX.slots[id];if(!p||p.track==null)return;if(p.rated===+v){p.rated=0;draw();return}
-   p.rated=+v;ev(+v>0?'like':'dislike',id);draw();toast(+v>0?'noted: more parts like this one':'noted: fewer parts like this one · 🎲 for another');return}
+  if(ds.mxpart){const [id,v]=ds.mxpart.split(':'),p=MX.slots[id];if(!p||p.track==null)return;if(p.rated===+v){p.rated=0;out('rated',id,{value:0});draw();return}
+   p.rated=+v;out('rated',id,{value:+v});ev(+v>0?'like':'dislike',id);draw();toast(+v>0?'noted: more parts like this one':'noted: fewer parts like this one · 🎲 for another');return}
   if(ds.mxsplice){MX.splice=MX.splice===ds.mxsplice?null:ds.mxsplice;draw();return}
   if(ds.mxpcadd){const p=MX.slots[ds.mxpcadd],cut=cutOf(p),last=cut.filter(c=>c[0]!=null).pop();cut.push([Math.min((p.bars||9999)-1,last[0]+last[1]),1]);await setCut(ds.mxpcadd,cut);return}
   if(ds.mxpcrest){const cut=cutOf(MX.slots[ds.mxpcrest]);cut.push([null,1]);await setCut(ds.mxpcrest,cut);return}
@@ -4432,7 +4458,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    let id=ids.find(x=>!MX.slots[x])||ids.find(x=>!MX.slots[x].lock);
    if(!id){if(MX.order.length>=MAXT){toast(`every ${k} slot is locked and the mixer is full`);return}id='s'+Date.now().toString(36);MX.order.push(id);MX.roles[id]=k}
    await roll(id,false,+tid);if(!MX.on)play(true);return}
-  if(ds.mxsong){const [s,tid]=ds.mxsong.split(':');MX.find=null;await roll(s,false,+tid);if(!MX.on)play(true);return}
+  if(ds.mxsong){const [s,tid]=ds.mxsong.split(':');MX.find=null;await roll(s,false,+tid,'find');if(!MX.on)play(true);return}
   if(t.id==='mxsave'||t.id==='mxkeepsn'||t.id==='mxdropsn'){BLEND.keep();const name=($('mxname').value||'').trim()||MX.name||`Mix ${new Date().toLocaleString()}`;
    if(MX._saving)return;
    // a strip that came with another saved combination doesn't silently become part of this one
@@ -4442,7 +4468,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
    const mix=JSON.parse(localStorage.getItem('dcStems')||'{}'),savedSig=sig();
    MX._saving=true;markSave();
    try{
-    const r=await api('api/stems/save',{name,mix,state:state()});
+    const r=await api('api/stems/save',{name,mix,state:state(),outs:MX.order.filter(id=>has(MX.slots[id])).map(id=>(heard(),oRec('saved',id,MX.slots[id])))});
     MX.rated=r.rated;MX.savedSig=savedSig;save();await refreshSaved();toast(`saved “${name}”`);
    }catch(err){toast('not saved: '+err.message+' (your combination is still here: try again)')}
    finally{MX._saving=false;draw()}
@@ -4451,15 +4477,16 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(t.id==='mxexport'){BLEND.keep();const now=BLEND.snapNow(),L8='ABCDEFGH',secs=(MX.snaps||[]).length?MX.snaps.map((sn,k)=>({label:L8[k],order:sn.order,roles:sn.roles,slots:sn.slots})):[{label:MX.name||'Mashup',order:now.order,roles:now.roles,slots:now.slots}];
    const name=(MX.name||'').trim()||`Mashup ${new Date().toISOString().slice(0,10)}`;t.disabled=true;t.textContent='exporting…';
    try{const r=await api('api/stems/export',{name,bpm:MX.bpm,key:MX.key||(MX.info&&MX.info.key)||null,sections:secs,bars:MX.exBars||8});
+    {const done=new Set();secs.forEach(sc=>Object.entries(sc.slots||{}).forEach(([id,p])=>{const k=has(p)&&dwKey(id,p);if(k&&!done.has(k)){done.add(k);out('exported',id,null,p)}}))}
     toast(`Live set → Mashups/${name}/${r.als} · ${r.tracks} tracks, ${r.sections} section${r.sections>1?'s':''} of ${r.bars} bars, dry`)}catch(err){toast('export failed: '+err.message)}draw();return}
   if(t.id==='mxrevert'){await refreshSaved();const m=(MX.saved||[]).find(x=>x.name===MX.name);if(!m){toast('no saved copy of this one');return}await openSaved(m);toast(`back to “${m.name}” as saved`);return}
   if(t.id==='mxdelsaved'){await api('api/stems/delete',{name:MX.name});await refreshSaved();toast(`deleted “${MX.name}”`);MX.name='';MX.savedSig=null;save();draw();return}
-  if(t.id==='mxup'){ev('like');toast('👍 noted: more like this');return}
-  if(t.id==='mxdown'){ev('dislike');MX.order.forEach(s=>{if(MX.slots[s])MX.slots[s].since=null});await rollAll();return}
+  if(t.id==='mxup'){MX.order.forEach(id=>out('rated_mix',id,{value:1}));ev('like');toast('👍 noted: more like this');return}
+  if(t.id==='mxdown'){MX.order.forEach(id=>out('rated_mix',id,{value:-1}));ev('dislike');MX.order.forEach(s=>{if(MX.slots[s])MX.slots[s].since=null});await rollAll('down');return}
   if(ds.mxroll){await roll(ds.mxroll);if(!MX.on)play(true);return}
-  if(ds.mxlock){const p=MX.slots[ds.mxlock];p.lock=!p.lock;if(p.lock)ev('lock',ds.mxlock);save();draw();return}
-  if(ds.mxsolo){const p=MX.slots[ds.mxsolo];p.solo=!p.solo;MX.order.forEach(apply);draw();return}
-  if(ds.mxmute){const p=MX.slots[ds.mxmute];p.mute=!p.mute;MX.order.forEach(apply);save();draw();return}});
+  if(ds.mxlock){const p=MX.slots[ds.mxlock];p.lock=!p.lock;out(p.lock?'locked':'unlocked',ds.mxlock);if(p.lock)ev('lock',ds.mxlock);save();draw();return}
+  if(ds.mxsolo){heard();const p=MX.slots[ds.mxsolo];p.solo=!p.solo;MX.order.forEach(apply);draw();return}
+  if(ds.mxmute){heard();const p=MX.slots[ds.mxmute];p.mute=!p.mute;MX.order.forEach(apply);save();draw();return}});
  L.addEventListener('input',e=>{if(st.tab!=='M')return;const t=e.target,ds=t.dataset;
   if(t.id==='mxq'){MX.find.q=t.value;draw();return}if(t.id==='mxname'){MX.name=t.value;return}
   if(ds.mxdb){MX.slots[ds.mxdb].db=+t.value;apply(ds.mxdb);t.title=dbv(+t.value)+' · double-click for 0 dB'}
@@ -4474,10 +4501,10 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   if(t.id==='mxexbars'){MX.exBars=+t.value;return}
   if(t.id==='mxrvtype'){BLEND.out(MX,AC);BLEND.setReverb(MX,t.value);save();draw();return}        // a type brings its own decay
   if(t.id==='mxrvdecay'){BLEND.out(MX,AC);BLEND.setReverb(MX,MX.reverb.type,+t.value);save();markSave();return}  // (on release: the room is rebuilt)
-  if(ds.mxrole){const id=ds.mxrole,old=MX.slots[id];if(MX.roles[id]===t.value)return;stopSrc(id);MX.roles[id]=t.value;  // a new role: a new part of that kind, the slot's mix settings stay
+  if(ds.mxrole){const id=ds.mxrole,old=MX.slots[id];if(MX.roles[id]===t.value)return;out('replaced',id,{by:'role'});stopSrc(id);MX.roles[id]=t.value;  // a new role: a new part of that kind, the slot's mix settings stay
    if(old)MX.slots[id]={db:old.db,mute:old.mute,solo:old.solo,eq:old.eq,dly:old.dly,dt:old.dt,fb:old.fb,eqOn:old.eqOn,dlyOn:old.dlyOn,rev:old.rev,revOn:old.revOn,_c:old._c,n:old.n,_v:old._v,_viewMode:old._viewMode,_preset:old._preset,_blank:true};
    apply(id);  // reroute any echoes while the new part loads
-   await roll(id);if(MX.slots[id]&&MX.slots[id]._blank){retire(id);delete MX.slots[id];await sync()}return}
+   await roll(id,false,undefined,'role');if(MX.slots[id]&&MX.slots[id]._blank){retire(id);delete MX.slots[id];await sync()}return}
   if(t.id==='mxload'){const m=(MX.saved||[]).find(x=>x.name===t.value);if(!m)return;await openSaved(m);return}
   if(ds.mxbestn){MX.bestN=+t.value;await bestLoad(ds.mxbestn);return}
   if(ds.mxpcxf){const p=MX.slots[ds.mxpcxf];p.xf=+t.value;await setCut(ds.mxpcxf,cutOf(p));return}
@@ -4528,7 +4555,7 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
  // ＋ Mashup in the sample panel: a short sample goes into a one-shot slot (an empty one, else a new one)
  async function addOneShot(i){const path=S[i][F_.path];if(S[i][F_.dur]>2*barLenM()+0.05){toast(`too long for a one-shot at ${MX.bpm} bpm (two bars at most)`);return}
   let id=MX.order.find(x=>isOS(x)&&!MX.slots[x]);if(!id){if(MX.order.length>=MAXT){toast(`the mashup is full (${MAXT} tracks)`);return}id='s'+Date.now().toString(36);MX.order.push(id);MX.roles[id]='oneshot'}
-  await roll(id,true,path);toast(MX.slots[id]?'added to Mashup as a one-shot: place its hits there':'that sample can\'t be a one-shot');save();draw()}
+  await roll(id,true,path,'add');toast(MX.slots[id]?'added to Mashup as a one-shot: place its hits there':'that sample can\'t be a one-shot');save();draw()}
  window.CRATE.mxAddOneShot=addOneShot;
  const _selOS=select;select=function(i,from){_selOS(i,from);if(!SERVED||!S[i]||S[i][F_.dur]>8||S[i][F_.cat]==='Percussion'&&S[i][F_.kind]!=='oneshot')return;const xb=document.querySelector('#detail [data-xp]');
   if(xb&&!$('mxosadd'))xb.insertAdjacentHTML('afterend',`<button id="mxosadd" data-i="${i}" title="put it in the Mashup as a one-shot: it plays at the steps you choose, shifted to the mashup's key">✦ Mashup</button>`)};
@@ -4539,9 +4566,10 @@ midiBtn();if(navigator.requestMIDIAccess&&navigator.permissions)navigator.permis
   to.push(UN.cur);UN.cur=from.pop();UN.busy=true;
   try{const sv=JSON.parse(UN.cur),old=MX.slots,keep={};
    // a slot whose part is the same keeps playing (only its settings change); the others stop and come back in
-   MX.order.forEach(id=>{const o=old[id],n=(sv.slots||{})[id];if(o&&n&&partId(o)===partId(n)&&(sv.roles||{})[id]===MX.roles[id])keep[id]=o;else retire(id)});
+   const by=d<0?'undo':'redo';  // (an undo is not a judgment of either part: undone / restored, not replaced)
+   MX.order.forEach(id=>{const o=old[id],n=(sv.slots||{})[id];if(o&&n&&partId(o)===partId(n)&&(sv.roles||{})[id]===MX.roles[id])keep[id]=o;else{out('undone',id,{by},o);retire(id)}});
    MX.bpm=sv.bpm||MX.bpm;MX.key=sv.key||'';MX.fx=sv.fx!==false;if(sv.reverb)BLEND.setReverb(MX,sv.reverb.type,sv.reverb.decay);
-   restore(sv);Object.entries(keep).forEach(([id,o])=>{if(MX.slots[id]){MX.slots[id]=Object.assign(o,MX.slots[id])}});
+   restore(sv);Object.entries(keep).forEach(([id,o])=>{if(MX.slots[id]){MX.slots[id]=Object.assign(o,MX.slots[id])}});MX.order.forEach(id=>{if(!keep[id])out('restored',id,{by})});
    MX.info=null;await sync();MX.order.forEach(apply);resolveSel()}catch(e){toast('undo: '+e.message)}finally{UN.busy=false}
   save();markSave();draw();toast(d<0?'undone · ⌘⇧Z to redo':'redone')}
  // ⌘Z / ⌘⇧Z on this tab undo and redo in the mashup (not the sketch); while typing, they stay the text field's own

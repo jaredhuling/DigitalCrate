@@ -9,6 +9,12 @@ Two parts:
 
 Unrated library samples act as weak negatives (positive-unlabelled learning). Recent events can be up-weighted
 for a "today's vibe" ranking.
+
+Since the switch-over (docs/plans/recommend.md) the samples surfaces are ranked by the shared taste model
+(reco/models/taste.py, kept fitted by reco/live.py) when the switch says samples: new (the default): scores_payload
+and cached_scores serve its score. This model stays for "today's vibe" (it weighs recent events; the shared model
+doesn't), for the Taste page's explanations of what was learned, and as the fallback before the shared model's first
+fit, or with the switch at samples: old.
 """
 import json
 import re
@@ -462,11 +468,54 @@ def compact(payload):
     keys = [p for p in payload["score"] if p in ids]
     return dict(n_labels=payload["n_labels"], n_pos=payload["n_pos"], disliked=payload["disliked"],
                 ids=[ids[p] for p in keys], score=[round(payload["score"][p], 3) for p in keys],
-                discover=[round(payload["discover"][p], 3) for p in keys])
+                discover=[round(payload["discover"][p], 3) for p in keys], policy=payload.get("policy"))
+
+
+NEW, OLD, FALLBACK = "reco.taste", "taste", "taste (new model not fitted yet)"
+
+
+def _disliked(con):
+    """Samples whose latest ✕ is on (as item_labels reads them)."""
+    return sorted(r[0] for r in con.execute("SELECT path FROM events WHERE type='dislike' GROUP BY path "
+                                            "HAVING MAX(ts) = MAX(CASE WHEN value = 1 THEN ts END)"))
+
+
+def _new_fit():
+    """The shared taste model's current fit when the switch says samples: new (None otherwise, or before its first
+    fit; a refit is started in the background when your ratings changed, never waited for)."""
+    try:
+        from .reco import live
+        if live.policy("samples") != "new":
+            return None
+        return live.fitted()
+    except Exception as e:
+        print("taste: the shared model is unavailable:", e)
+        return None
 
 
 def scores_payload(recent_hours=None):
-    """Scores for the browser. The model is refit only when your ratings, listening or the samples change (a
+    """Scores for the browser: the shared taste model's (see the top), or this module's when the switch says samples:
+    old, for "today's vibe" (recent_hours), and until the shared model's first fit. policy says which."""
+    f = _new_fit() if recent_hours is None else None
+    if f is not None:
+        z, d = f.z, f.discover()
+        ok = np.isfinite(z)
+        return dict(n_labels=f.t.n, n_pos=f.t.n_pos, policy=NEW,
+                    score={p: round(float(z[i]), 4) for i, p in enumerate(f.paths) if ok[i]},
+                    discover={p: round(float(d[i]), 4) for i, p in enumerate(f.paths) if ok[i]},
+                    disliked=_disliked(_db()))
+    out = _old_payload(recent_hours)
+    if out and recent_hours is None:
+        try:
+            from .reco import live
+            out["policy"] = OLD if live.policy("samples") == "old" else FALLBACK
+        except Exception:
+            out["policy"] = OLD
+    return out
+
+
+def _old_payload(recent_hours=None):
+    """This module's scores. The model is refit only when your ratings, listening or the samples change (a
     listen counts, so it stays current); otherwise the last fit is reused and only 'discover' is re-drawn."""
     con = _db()
     L = _library(con)
@@ -493,7 +542,11 @@ def scores_payload(recent_hours=None):
 def cached_scores():
     """The last fit's scores ({path: score}) and disliked paths, without refitting: for callers on a click path (the
     Mashup's one-shot dice), where a few seconds' wait for a fresh fit isn't worth it. None if nothing was fitted yet
-    in this process: then a fit is started in the background for the next call."""
+    in this process: then a fit is started in the background for the next call. The shared model's scores when the
+    switch says samples: new and it has been fitted."""
+    f = _new_fit()
+    if f is not None:
+        return {p: float(v) for p, v in zip(f.paths, f.z) if np.isfinite(v)}
     res = _FIT.get(None)
     if res is None:
         import threading
@@ -502,7 +555,7 @@ def cached_scores():
 
             def go():
                 try:
-                    scores_payload(None)
+                    _old_payload(None)
                 finally:
                     cached_scores._busy = False
             threading.Thread(target=go, daemon=True).start()
@@ -515,7 +568,7 @@ def why(path):
     model + 0.3 x closeness to a favourite + 0.3 x its song), the samples you liked that it's closest to, what you
     did with its song, and what in the regression pushed it up or down (its sound, its type, quality, the song's
     style...). Every number comes from the same fit that ranks the page."""
-    scores_payload(None)
+    _old_payload(None)
     res, con = _FIT.get(None), _db()
     L = _library(con)
     if not res or L is None or path not in L["pos"]:
@@ -523,6 +576,12 @@ def why(path):
     i = L["pos"][path]
     sc = np.asarray(res["score"])
     out = dict(path=path, top=round(float(100 * (sc > sc[i]).mean()), 1), n_labels=res["n_labels"], n_pos=res["n_pos"])
+    f = _new_fit()
+    if f is not None and path in f.pos and np.isfinite(f.z[f.pos[path]]):
+        # the rank is the shared model's (what orders the page); the parts and reasons below are the earlier model's
+        z = f.z[np.isfinite(f.z)]
+        out.update(top=round(float(100 * (z > f.z[f.pos[path]]).mean()), 1), n_labels=f.t.n, n_pos=f.t.n_pos,
+                   model=NEW, note="ranked by the shared taste model; the breakdown is the earlier model's")
     labels = item_labels(con, None, L["durs"])
     pos = [p for p, (y, w) in labels.items() if y == 1 and p in L["pos"] and p != path]
     if pos:

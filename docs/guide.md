@@ -195,8 +195,18 @@ Hover over the song for the full name and why that part was picked.
   shifted by the smallest interval to the key.
 - **Harmony fit** compares the pitched parts' notes bar by bar after shifting (100% = the same notes). New parts are
   picked to fit.
+- **How the dice picks:** each candidate part scores by the starting guesses (how active it is, how little it has to
+  be stretched and shifted, how well its notes fit what's playing, how still its harmony is, and how close its sound is
+  to the stems you kept rather than threw out, with its own song left out), plus your taste model's score for the
+  stem's sound and its song: what you starred in the library and kept in Mashup. The taste term decides the order;
+  how widely the dice spreads its deals over the best songs is as before (it would otherwise keep dealing the same
+  few songs you like most).
+- **Parts you turned down come back less:** a part you re-rolled within seconds (or 20 s of listening), removed or
+  rated 👎, and never kept, scores lower the next times, more for each time, fading by half in a week. The rest of
+  that song's stem gets a milder version. Anything you keep, lock, snapshot, save, rate 👍 or listen to for a minute
+  clears it. (Before, a part re-rolled away was dealt again and re-rolled again 118 times out of 127.)
 - **It learns:** 👍 and 👎 rate the whole combination; a part you throw out within seconds counts a little against
-  it, one you keep or lock a little for it. After a dozen ratings the recommendations adapt.
+  it, one you keep or lock a little for it. These feed the taste model (refitted in the background).
 
 ## Chords
 
@@ -247,11 +257,32 @@ an Ableton Drum Rack (`.adg`).
 
 ## Taste
 
-- Learns from ★, ✕, collections, listening time, replays and skips.
+- Learns from ★, ✕, collections and what you've heard, and from the stems you keep or throw out in Mashup.
+- **How recommendations work:** one shared taste model ranks "for you", the crate, discover, sets, Fits my track,
+  drum kits, Mashup's one-shots and pads, the edit suggestions' judge, and adds its say to the Mashup dice. It is a
+  Bayesian model of the sound you like (CLAP embeddings, with a smooth nonlinear term), the sample's type and
+  measurements, and each song's and artist's own lift, shrunk by how much songs differ. A favorite counts yes; a
+  sample you heard and didn't star counts no; one you never heard counts nothing. A stem you kept in Mashup is evidence
+  about the same taste, weighted by how far Mashup choices follow it. It knows how sure it is: **discover** is a draw
+  from that uncertainty, so a sound it hasn't seen you rate gets a fair chance. It refits in the background (10-15 s)
+  after you rate or listen; meanwhile the previous fit serves. **Today's vibe** still uses the earlier model, which
+  weighs recent listening.
+- **The switch:** on the Taste page, under *Which model deals*, `samples` is **new** (the shared model) or **old**
+  (the earlier blend), and `mashup` is **new** (guesses + taste), **w0** (the guesses alone) or **old** (the weights
+  learned before, which measured no better than chance). Saved in `_data/reco/settings.json`.
+- **What is logged:** every Mashup deal is an impression (what else was on offer, each one's chance, the model that
+  dealt it); what became of each part (replaced, kept, saved, rated…) is an outcome. The "for you" and discover
+  rankings the page is served are logged too, once per ranking (the top 50 with their scores and the model). This is
+  what lets a later model be tested against how the current one dealt.
 - **💡 why this?** on any sample: its rank, what drove it (the model, closeness to a like, its song), what pulled it
   up or down, and the liked samples it's closest to.
-- **🧠 Taste page:** honest held-out accuracy over time (regression and trees separately), what it has learned in
-  words, where it's wrong, and which samples would teach it most.
+- **🧠 Taste page:** honest held-out accuracy over time for the model in use, *How well each recommender predicts
+  you* (every surface's latest harness result: the model in use, the one it replaced, the interval, or "too little
+  data"; **measure again** runs every task in the background), what it has learned in words (still read from the
+  earlier model, and labeled so), where it's wrong, and which samples would teach it most.
+- **`digitalcrate reco eval`** measures every recommender on held-out data, read-only: by song, forward in time, by
+  sample. `--task mashup_part`, `--quick`, `--show` (the last results). `digitalcrate reco log` lists what is logged.
+  Results go to `_data/reco/runs/`.
 - **Your styles:** songs are tagged with 400 Discogs styles from their audio; the ones behind your likes guide
   **🔭 Scout** and suggest new artists via ListenBrainz.
 
@@ -326,8 +357,10 @@ flowchart LR
 - **Source policy:** sample-based producers (Burial, Gas, Madlib…) are reference only, never sampled; hip-hop is
   vocals only. Extend it in `digitalcrate.toml`.
 - **Compatibility:** harmony (Camelot + chroma) × tempo × role and sound.
-- **Taste:** Bayesian logistic regression averaged with gradient-boosted trees on CLAP embeddings, sound measurements
-  and song style, blended with closeness to your nearest favorite.
+- **Taste:** a hierarchical Bayesian logistic regression (Laplace posterior) on CLAP principal directions, a
+  Gaussian-process term through 400 landmark sounds, the sample's metadata, and song and artist random effects, with
+  every prior's strength set by the evidence and the probabilities calibrated. Mashup choices enter with their own
+  offset and a learned trust. See [docs/plans/recommend.md](plans/recommend.md).
 - **Conforming:** the smallest pitch shift to the key; Signalsmith Stretch or tape-style Re-Pitch, picked in blind
   listening tests.
 - **Chords:** basic-pitch notes + chroma, mood-colored vocabulary, beam search with voice-leading terms.
@@ -362,6 +395,7 @@ serve [--port 8765] · open · app   the app
 firstrun [--mine N]                what the setup page runs
 trash [--empty]                    deleted samples
 taste                              fit the taste model, report accuracy
+reco eval [--task T] [--quick]     every recommender on held-out data (read-only); reco eval --show, reco log
 ingest URL|FILE|FOLDER [--drums]   add a source and mine it
 export --favorites|--kit K|--ids … [--rack] [--key Fm --bpm 124]
 backup [--install] [--restore ZIP]

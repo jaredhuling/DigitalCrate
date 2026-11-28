@@ -35,13 +35,13 @@ def _saved_jobs():
         return {}
 
 
-BACKGROUND = {"styles", "lyrics", "credits", "reloop", "loops", "sections", "pads", "grain", "stems"}
+BACKGROUND = {"styles", "lyrics", "credits", "reloop", "loops", "sections", "pads", "grain", "stems", "reco"}
 _SLOW = {}
 
 
 LABELS = dict(pads="pads", grain="separation grain", stems="stems for Mashup", sections="song sections",
               styles="styles", lyrics="words", loops="sustain loops", process="mining", drums="drums",
-              ytscout="scout", ingest="adding a source")
+              ytscout="scout", ingest="adding a source", reco="measuring recommenders")
 
 
 def start_job(kind, args, target):
@@ -302,6 +302,16 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
         super().end_headers()
 
+    def _dealt(self, SM, part, rec, surface, deal, req):
+        """A deal's impression: written now (its id goes back with the part), or kept for later if prefetched."""
+        extra = {k: req[k] for k in ("list", "rank") if req.get(k) is not None}
+        if deal == "pre":
+            part["pre"] = SM.deal(rec, surface, deal, pre=True, extra=extra)
+        else:
+            part["imp"] = SM.deal(rec, surface, deal, extra=extra)
+            if deal == "best" and req.get("list") is not None and req.get("rank") is not None:
+                SM.listed(req["list"], req["rank"])
+
     def _json(self, obj, code=200):
         body = json.dumps(obj).encode()
         self.send_response(code)
@@ -426,7 +436,14 @@ class Handler(SimpleHTTPRequestHandler):
             from .taste import compact, scores_payload
             recent = 3 if "recent=1" in self.path else None
             p = scores_payload(recent)
-            return self._json(compact(p) if "ids=1" in self.path else p)
+            if p and recent is None:  # the "for you" and discover rankings it makes, logged once the page has them
+                from .reco import live
+                fav = {r[0] for r in _db().execute("SELECT path FROM favorites")}
+                p["served"] = live.served(p, fav)
+            out = compact(p) if "ids=1" in self.path else p
+            if p and "ids=1" in self.path:
+                out["served"] = p.get("served")
+            return self._json(out)
         if self.path.startswith("/api/onsets?"):
             from urllib.parse import parse_qs, urlparse
             from .edit import onsets
@@ -605,14 +622,24 @@ class Handler(SimpleHTTPRequestHandler):
                 what, state = self.path.rsplit("/", 1)[1], req.get("state") or {}
                 if what == "library":
                     lib = SM.library()
-                    return self._json(dict(n=len(lib), rated=SM.weights()[1], songs=[
+                    return self._json(dict(n=len(lib), rated=SM.rated(), songs=[
                         dict(track=t, artist=m["artist"], title=m["title"], bpm=m["bpm"], bars=len(m["bars"]) - 1,
                              key=SM.NOTES[m["pc"]] + ("m" if m["scale"] == "minor" else ""), stems=m["stems"], tops=SM.tops_ready(t, m))
                         for t, m in lib.items()]))
+                deal = req.get("deal")  # sent by the mixer when it deals (a check of fit etc. is not a deal): recorded
                 if what == "pick":
-                    return self._json(dict(part=SM.pick(req["stem"], state, avoid=set(req.get("avoid") or []),
-                                                        n=req.get("n"), track=req.get("track"),
-                                                        slot=req.get("slot")), info=SM.info(state)))
+                    rec = {} if deal else None
+                    part = SM.pick(req["stem"], state, avoid=set(req.get("avoid") or []), n=req.get("n"),
+                                   track=req.get("track"), slot=req.get("slot"), rec=rec)
+                    if part and rec:
+                        surface = "mashup.best" if deal == "best" else "mashup.find" if req.get("track") is not None \
+                            else "mashup.dice"
+                        self._dealt(SM, part, rec, surface, deal, req)
+                    return self._json(dict(part=part, info=SM.info(state)))
+                if what == "dealt":  # a prefetched deal was played
+                    return self._json(dict(imp=SM.dealt(str(req.get("pre") or ""), req.get("via"))))
+                if what == "outcome":
+                    return self._json(dict(logged=SM.outcomes(req.get("out") or [])))
                 if what == "render":
                     with_tops = req["stem"] in SM.DRUM_ROLES and SM.tops_prepared(req["track"])
                     f = SM.render(req["track"], req["stem"], req["bar0"], req["n"], req["bpm"], req.get("semis") or 0,
@@ -632,22 +659,27 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json(SM.export(req.get("name") or "Mashup", float(req.get("bpm") or 100), req.get("key"),
                                                 req.get("sections") or [], req.get("bars") or 8, req.get("reveal", True)))
                 if what == "best":
-                    return self._json(dict(parts=SM.top_fits(req["role"], state, req.get("slot"), req.get("n"),
-                                                             req.get("top") or 12)))
-                if what == "oneshot" and req.get("kind") == "pad":
-                    return self._json(dict(part=SM.pad(state, req.get("n") or 4, set(req.get("avoid") or []),
-                                                       path=req.get("path")), info=SM.info(state)))
+                    rec = {} if deal else None
+                    parts = SM.top_fits(req["role"], state, req.get("slot"), req.get("n"), req.get("top") or 12, rec=rec)
+                    return self._json(dict(parts=parts, imp=SM.deal(rec, "mashup.best_list", deal) if parts else None))
                 if what == "oneshot":
-                    return self._json(dict(part=SM.oneshot(state, req.get("n") or 1, set(req.get("avoid") or []),
-                                                           path=req.get("path")), info=SM.info(state)))
+                    pad = req.get("kind") == "pad"
+                    rec = {} if deal else None
+                    fn = SM.pad if pad else SM.oneshot
+                    part = fn(state, req.get("n") or (4 if pad else 1), set(req.get("avoid") or []), path=req.get("path"),
+                              rec=rec, slot=req.get("slot"))
+                    if part and rec:
+                        surface = "mashup.best" if deal == "best" else "mashup.find" if req.get("path") \
+                            else "mashup.pad" if pad else "mashup.oneshot"
+                        self._dealt(SM, part, rec, surface, deal, req)
+                    return self._json(dict(part=part, info=SM.info(state)))
                 if what == "info":
                     return self._json(SM.info(state))
                 if what == "alts":
                     return self._json(dict(alts=SM.alts(state, req["slot"])))
                 if what == "save":
-                    SM.save_mix(req["name"], req["mix"])
-                    SM.log("save", state)
-                    return self._json(dict(ok=True, rated=SM.weights()[1]))
+                    SM.save(req["name"], req["mix"], state, req.get("outs"))
+                    return self._json(dict(ok=True, rated=SM.rated()))
                 if what == "saved":
                     return self._json(dict(mixes=SM.mixes()))
                 if what == "delete":
@@ -655,7 +687,7 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json(dict(ok=True))
                 if what == "event":
                     n = SM.log(req["kind"], state, req.get("stem"))
-                    return self._json(dict(logged=n, rated=SM.weights()[1]))
+                    return self._json(dict(logged=n, rated=SM.rated()))
                 return self._json({"error": "unknown"}, 404)
             elif self.path == "/api/pad/playable":
                 from .pads import playable
@@ -805,6 +837,15 @@ class Handler(SimpleHTTPRequestHandler):
                                          pad_edits=req.get("pad_edits") or None))
             elif self.path == "/api/event":
                 log_event(path, req["type"], req.get("value"), req.get("id"), req.get("context"))
+            elif self.path == "/api/reco/served":  # the page has the rankings it was served: one impression each
+                from .reco import live
+                return self._json(dict(logged=live.record(req.get("token"))))
+            elif self.path == "/api/reco/settings":
+                from .reco import live
+                return self._json(dict(settings=live.set_setting(req.get("surface"), req.get("value"))))
+            elif self.path == "/api/reco/eval":  # every recommender measured again, in the background
+                from .taste_report import eval_all
+                return self._json(dict(job=eval_all()))
             else:
                 return self._json({"error": "not found"}, 404)
             return self._json({"ok": True})

@@ -5,7 +5,7 @@
     render(track, stem, bar0, n, bpm, semis)   -> a cached WAV of those bars, exactly n bars long at bpm
     pick(stem, state)             a part for a slot that fits what's playing (scored, drawn with some randomness)
     info(state)                   the key shift of each slot and how well the pitched parts fit together
-    log(kind, state, stem)        what you did with a combination; weights() learns from it
+    log(kind, state, stem)        what you did with a combination (the legacy log: stem_events)
 
 A part is (track, stem, bar0, n, k): n mixer bars of one stem starting at the song's bar bar0. k is how many of the
 song's bars fill one mixer bar: 1 normally, 2 when the song is about twice the mixer's tempo (played "half-time": two
@@ -25,6 +25,7 @@ import numpy as np
 
 from . import basscond, config as C, songkeys
 from .db import connect
+from .reco import log as RL
 
 DIR = C.DATA_DIR / "stems"
 CACHE = DIR / "cache"
@@ -841,9 +842,17 @@ def _taste(con):
     return {s: tuple(v / (np.linalg.norm(v) + 1e-9) if np.linalg.norm(v) else None for v in d) for s, d in acc.items()}
 
 
+def rated(con=None):
+    """How many logged Mashup events there are (what the page counts as ratings)."""
+    con = con or _db()
+    return con.execute("SELECT COUNT(*) FROM stem_events WHERE x IS NOT NULL").fetchone()[0]
+
+
 def weights(con=None):
     """(weights, how many ratings they're learned from). The starting guesses until there are a dozen ratings, then a
-    ridge logistic regression pulled toward the guesses (so a few ratings nudge, many decide)."""
+    ridge logistic regression pulled toward the guesses (so a few ratings nudge, many decide). The dice used these
+    until the switch-over; they are no better than chance out of sample (reco eval --task mashup_part: mashup.learned)
+    and deal now only with the switch at mashup: old."""
     con = con or _db()
     rows = con.execute("SELECT x, y, w FROM stem_events WHERE x IS NOT NULL").fetchall()
     if len(rows) < 12:
@@ -858,6 +867,73 @@ def weights(con=None):
         w -= 0.5 * g
         b -= 0.5 * float((sw * (p - y)).sum() / sw.sum())
     return np.maximum(w, 0), len(rows)  # every feature is "more is better": a negative weight would be noise
+
+
+_SCORING = {}
+
+
+def _sig(con, *tables):
+    out = []
+    for t in tables:
+        try:
+            out.append(tuple(con.execute(f"SELECT COUNT(*), MAX(rowid) FROM {t}").fetchone()))
+        except Exception:
+            out.append(None)
+    return tuple(out)
+
+
+def _rejections(con):
+    """The parts you turned down (reco.rejected), re-read when the logs grow (or after ten minutes: they fade)."""
+    from .reco.rejected import Rejections
+    key = _sig(con, "stem_events", "reco_outcomes")
+    got = _SCORING.get("rej")
+    if not got or got[0] != key or time.time() - got[1].now > 600:
+        got = _SCORING["rej"] = (key, Rejections.load(con))
+    return got[1]
+
+
+def _loso(con):
+    """'sound' (like - dislike centres) with each song's own events left out: (track, stem) -> value."""
+    from .reco.models.mashup import loso_sound
+    key = _sig(con, "stem_events")
+    got = _SCORING.get("loso")
+    if not got or got[0] != key:
+        got = _SCORING["loso"] = (key, loso_sound(con, lambda t, s: _emb(int(t), s)))
+    return got[1]
+
+
+def scoring(con=None):
+    """How the dice scores a part, by the switch (reco.live, mashup: new | w0 | old) -> dict(w, taste, plus, policy).
+    A part's score is w . x, x as features() computes it with `taste` (the 'sound' feature's centres, or a function
+    (track, stem) -> sound), + the taste term - the penalty, plus(stem, track, bar0, n) -> (taste term, penalty), where
+    there is one. The taste term orders the parts but stays out of the draw's score factor (pick()), so it reorders
+    the deal without narrowing it:
+      new   W0 . x (sound with the song's own events left out) + the shared taste of the stem's sound and song
+            (reco.models.mashup.taste_only; until it is fitted, W0 alone) - the penalty for parts you turned down
+      w0    W0 . x - the same penalty
+      old   the learned weights (weights()), as before the switch-over"""
+    from .reco import live
+    con = con or _db()
+    mode = live.policy("mashup")
+    if mode == "old":
+        w, n = weights(con)
+        return dict(w=w, taste=_taste(con), plus=None,
+                    policy=dict(mashup="old", w=[round(float(v), 4) for v in w], rated=n))
+    rj = _rejections(con)
+    ch = None
+    if mode == "new":
+        live.fitted()  # (a refit in the background when the evidence changed; never waits)
+        ch = live.chooser()
+    w = np.asarray(ch._w if ch is not None else W0, float)
+    taste = _loso(con) if mode == "new" else _taste(con)
+
+    def plus(stem, track, bar0, n):  # -> (the taste term, the penalty)
+        return (ch.linear(stem, track)[1] if ch is not None else 0.0), rj.penalty(track, stem, bar0, n)
+    pol = dict(mashup=mode, w=[round(float(v), 4) for v in w], rated=rated(con), rejected=len(rj),
+               sound="own song left out" if mode == "new" else "all events")
+    if mode == "new":
+        pol["taste"] = None if ch is None else dict(model="reco.taste", g={k: v for k, v in ch.about()["taste"].items()})
+    return dict(w=w, taste=taste, plus=plus, policy=pol)
 
 
 def best_k(m, bpm, stem):
@@ -883,18 +959,23 @@ def features(stem, m, bar0, n, state, lib, taste, target, k=1, slot=None):
                 o = lib[int(p["track"])]
                 fits.append(fit((m, bar0, n, semis, k), (o, int(p["bar0"]), int(p["n"]),
                                                         _semis(state, s, p, lib, target), float(p.get("k") or 1))))
-    like, dis = taste.get(stem, (None, None))[::-1] if stem in taste else (None, None)
-    e = _emb(m["track"], stem)
-    snd = (float(e @ like) if like is not None else 0.0) - (float(e @ dis) if dis is not None else 0.0)
+    if callable(taste):  # (track, stem) -> sound (scoring(): the song's own events left out)
+        snd = float(taste(m["track"], stem))
+    else:
+        like, dis = taste.get(stem, (None, None))[::-1] if stem in taste else (None, None)
+        e = _emb(m["track"], stem)
+        snd = (float(e @ like) if like is not None else 0.0) - (float(e @ dis) if dis is not None else 0.0)
     st = still(m, bar0, n, k) if stem in ("bass", "other") else 0.5  # a moving vocal line is fine; drums have none
     x = [act, -abs(float(np.log(ratio))) - (0.05 if k != 1 else 0.0), -abs(semis), float(np.mean(fits)) if fits else 0.5,
          snd, st]
     return x, semis, ratio
 
 
-def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_tempo=False, slot=None, per=4):
+def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_tempo=False, slot=None, per=4, plus=None):
     """Scored candidate parts: per song its four most active stretches (on 4-bar phrases), each also tried starting
-    1-3 bars later when there's harmony to fit (the chords may line up better a bar or two on)."""
+    1-3 bars later when there's harmony to fit (the chords may line up better a bar or two on). plus(stem, track,
+    bar0, n) -> (taste term, penalty), added to each part's score (scoring()).
+    -> [(score, track, bar0, semis, x, k, score without the taste term)]"""
     ctx = stem in PITCHED and any(sid != slot and s_ in PITCHED for sid, s_, _ in _parts(state, lib))
     cands = []
     for tid, m in lib.items():
@@ -920,14 +1001,18 @@ def _candidates(stem, state, lib, taste, target, w, n, skip, only=None, any_temp
                     break
                 x, semis, _ = features(stem, m, b + sh, n, state, lib, taste, target, k, slot)
                 sc = float(w @ np.array(x)) - 0.02 * sh  # the phrase start, unless a later bar clearly fits better
+                t_ = 0.0
+                if plus is not None:
+                    t_, pen = plus(stem, tid, b + sh, n)
+                    sc += t_ - pen
                 if best is None or sc > best[0]:
-                    best = (sc, tid, b + sh, semis, x, k)
+                    best = (sc, tid, b + sh, semis, x, k, sc - t_)  # (the last: the score without the taste term)
             if best and not (stem == "vocals" and abs(best[3]) > 4 and only is None):
                 cands.append(best)
     return cands
 
 
-def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
+def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None, rec=None):
     """A part of this stem for a slot (slot: its id; the stem's name when left out): scored against what the other
     slots play, drawn from the best with some randomness. track: from this song (you chose it): its best-fitting
     bars, whatever its tempo.
@@ -935,24 +1020,31 @@ def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
     Exploring: the draw is over songs, not parts (each song's best part), from the best-scoring quarter of them, with a
     chance that falls off by rank more than by score (by score alone, five songs took two thirds of the deals out of 180). The
     songs this slot dealt lately (avoid, up to a quarter of what's on offer) sit out, so a run of deals moves through
-    the library before any song comes back."""
+    the library before any song comes back.
+
+    rec: a dict to fill with what was on offer (for deal()): the context, each song's best part with its score and
+    its exact chance of being drawn, the policy."""
     slot = slot or stem
     rng = rng or np.random.default_rng()
     lib, con = library(), _db()
-    w, n_rated = weights(con)
-    taste = _taste(con)
+    sco = scoring(con)
+    w, taste, plus, n_rated = sco["w"], sco["taste"], sco["plus"], sco["policy"]["rated"]
     cur = (state.get("slots") or {}).get(slot) or {}
     n = int(n or cur.get("n") or 4)
     target = target_key(state, skip=slot)
     if track is not None:
-        cands = _candidates(stem, state, lib, taste, target, w, n, set(), only=int(track), any_tempo=True, slot=slot)
+        cands = _candidates(stem, state, lib, taste, target, w, n, set(), only=int(track), any_tempo=True, slot=slot,
+                            plus=plus)
     else:
         # a part from a song that's already playing in another slot wouldn't be recombining: only if nothing else fits
         playing = {int(p["track"]) for sid, _, p in _parts(state, lib) if sid != slot}
         offer = sum(stem in m["stems"] for m in lib.values())
         avoid = [int(t) for t in avoid if t is not None][-max(2, offer // 4):]
-        cands = _candidates(stem, state, lib, taste, target, w, n, set(avoid) | playing | {cur.get("track")}, slot=slot) \
-            or _candidates(stem, state, lib, taste, target, w, n, {cur.get("track")}, slot=slot)
+        cands = _candidates(stem, state, lib, taste, target, w, n, set(avoid) | playing | {cur.get("track")}, slot=slot,
+                            plus=plus)
+        relaxed = not cands
+        if relaxed:
+            cands = _candidates(stem, state, lib, taste, target, w, n, {cur.get("track")}, slot=slot, plus=plus)
     if not cands:
         return None
     cands.sort(key=lambda c: -c[0])
@@ -966,10 +1058,33 @@ def pick(stem, state, avoid=(), n=None, rng=None, track=None, slot=None):
                 seen.add(c[1])
                 songs.append(c)
         top = songs[:max(8, len(songs) // 4)]
-        sc_ = np.array([c[0] for c in top])  # by rank, so the draw is wide; by score too, so a clearly worse part stays rare
+        # by rank, so the draw is wide; by score too, so a clearly worse part stays rare. The score here leaves the
+        # taste term out: it orders the songs, but by score it would narrow the draw to a handful (five songs took
+        # three quarters of 200 rolls with it in, against half without)
+        sc_ = np.array([c[6] for c in top])
         p = np.exp(-np.arange(len(top)) / max(2.0, len(top) / 2.5)) * np.exp((sc_ - sc_.max()) / 0.7)
         k_ = int(rng.choice(len(top), p=p / p.sum()))
-    sc, tid, b, semis, x, k = top[k_]
+    if rec is not None:
+        try:
+            if track is not None:  # you chose the song: its best part, for certain
+                pool, probs = top, np.r_[1.0, np.zeros(len(top) - 1)]
+                draw = None
+            else:  # the draw: over the top songs; the songs below them (and the songs that sat out) had no chance
+                pool, probs = songs, np.r_[p / p.sum(), np.zeros(len(songs) - len(top))]
+                draw = dict(over=len(top), rank_temp=max(2.0, len(top) / 2.5), score_temp=0.7,
+                            score_factor="score without the taste term (draw)")
+            ctx = _deal_ctx(state, slot, stem, n, target, lib)
+            ctx.update(song=None if track is None else int(track), avoid=[] if track is not None else list(avoid),
+                       playing=sorted(playing) if track is None else [], relaxed=bool(track is None and relaxed),
+                       parts=len(cands), rank=k_)
+            _fill(rec, ctx, [dict(item=_item(stem, c[1], c[2], n), score=round(float(c[0]), 5), k=c[5],
+                                  draw=round(float(c[6]), 5), semis=int(c[3]), x=[round(float(v), 4) for v in c[4]])
+                             for c in pool], probs, k_,
+                  dict(sco["policy"], model="stems.pick", version=POLICY, draw=draw))
+        except Exception as e:  # a deal never fails over its record
+            _warn("pick record", e)
+            rec.clear()
+    sc, tid, b, semis, x, k, _ = top[k_]
     m = lib[tid]
     part = dict(stem=stem, track=tid, bar0=b, n=n, k=k, off=0, artist=m["artist"], title=m["title"], semis=semis,
                 bars=len(m["bars"]) - 1, why=dict(zip(FEATURES, [round(float(v), 3) for v in x])), score=round(sc, 3),
@@ -987,14 +1102,14 @@ def alts(state, slot):
     if cur.get("track") is None or int(cur["track"]) not in lib:
         return []
     stem, tid, n = _role(slot, cur), int(cur["track"]), int(cur.get("n") or 4)
-    w, _ = weights(con)
-    cands = _candidates(stem, state, lib, _taste(con), target_key(state, skip=slot), w, n, set(), only=tid,
-                        any_tempo=True, slot=slot, per=8)
+    sco = scoring(con)
+    cands = _candidates(stem, state, lib, sco["taste"], target_key(state, skip=slot), sco["w"], n, set(), only=tid,
+                        any_tempo=True, slot=slot, per=8, plus=sco["plus"])
     cands.sort(key=lambda c: -c[0])
     m = lib[tid]
     out = [dict(stem=stem, track=tid, bar0=b, n=n, k=k, semis=semis, artist=m["artist"], title=m["title"],
                 bars=len(m["bars"]) - 1, why=dict(zip(FEATURES, [round(float(v), 3) for v in x])), score=round(sc, 3))
-           for sc, _, b, semis, x, k in cands]
+           for sc, _, b, semis, x, k, _ in cands]
     if not any(o["bar0"] == int(cur["bar0"]) for o in out):
         out.insert(0, dict(stem=stem, track=tid, bar0=int(cur["bar0"]), n=n, k=float(cur.get("k") or 1), artist=m["artist"],
                            title=m["title"], bars=len(m["bars"]) - 1))
@@ -1004,10 +1119,11 @@ def alts(state, slot):
     return out
 
 
-def log(kind, state, stem=None):
+def log(kind, state, stem=None, skip=None):
     """What you did. like / dislike / save: the whole combination (every slot). reroll: the slot's part thrown out
     within a few seconds (weak no). remove: you took it out. kept: it played a good while, or you locked it (weak yes).
-    snap: a snapshot was taken with this part in it (weak yes)."""
+    snap: a snapshot was taken with this part in it (weak yes). skip: parts (reco.log.part items) not to log, e.g. those
+    a mix of this name was already saved with (a re-save is no new yes); each part is then logged once."""
     y, wgt = {"like": (1, 1.0), "dislike": (0, 1.0), "reroll": (0, 0.4), "kept": (1, 0.4), "lock": (1, 0.6),
               "save": (1, 1.2), "remove": (0, 0.6), "snap": (1, 0.6)}[kind]
     con, lib = _db(), library()
@@ -1016,6 +1132,11 @@ def log(kind, state, stem=None):
     for sid, s, p in _parts(state, lib):  # stem: here a slot id (or, in older calls, the stem itself)
         if stem and sid != stem:
             continue
+        if skip is not None:
+            it = RL.part(p["track"], s, p["bar0"], p["n"])
+            if it in skip:
+                continue
+            skip.add(it)
         x, _, _ = features(s, lib[int(p["track"])], int(p["bar0"]), int(p["n"]), state, lib, taste, target,
                            float(p.get("k") or 1), sid)
         con.execute("INSERT INTO stem_events VALUES (?,?,?,?,?,?,?,?,?)",
@@ -1023,6 +1144,193 @@ def log(kind, state, stem=None):
         n += 1
     con.commit()
     return n
+
+
+# ---------------------------------------------------------------- what was dealt, and what became of it
+# Every deal is recorded as an impression (reco.log): the context (the slot, tempo, key, the other parts playing), what
+# else was on offer with each one's exact chance of being drawn, and the policy that drew it. The browser keeps each
+# slot's impression id and reports what happened to the part (reco.log.outcome). Written on a short busy timeout and
+# committed at once (a write lock held long blocks the app: grain.py); a failure is printed and the deal goes on.
+
+POLICY = 2  # the dealing rules' version: bump when pick / oneshot / pad / top_fits draw differently (2: the switch-over,
+            # policy.mashup says which scoring dealt: new / w0 / old)
+SHOWN = 40  # candidates kept per impression (the rest: their count and their total chance)
+_STASH = {}  # prefetched deals not heard yet: token -> (surface, record); written once the browser plays one
+
+
+def _warn(what, e):
+    import sys
+    print(f"stems: {what} not recorded: {type(e).__name__}: {e}", file=sys.stderr)
+
+
+def _kname(t):
+    return (NOTES[t[0]] + ("m" if t[1] == "minor" else "")) if t else None
+
+
+def _item(stem, track=None, bar0=None, n=None, sample=None):
+    """A part, or a library sample (a one-shot or pad), as a reco item. A stem turned one-shot is its part."""
+    if sample is not None:
+        sm = str(sample).split(":")
+        if sm[0] == "stem" and len(sm) >= 5:
+            return RL.part(sm[1], sm[2], sm[3], sm[4])
+        return ("sample", str(sample))
+    return RL.part(track, stem, bar0, n)
+
+
+def _deal_ctx(state, slot, stem, n, target, lib=None):
+    """Where a deal happened: the slot, its role, the mixer's tempo, key (set, and the one fitted to), the bars, and the
+    other parts playing as [track, stem, bar0, n, k, semis]."""
+    lib = library() if lib is None else lib
+    others = []
+    for sid, s_, p in _parts(state, lib):
+        if sid == slot:
+            continue
+        try:
+            sm = _semis(state, s_, p, lib, target)
+        except Exception:
+            sm = None
+        others.append([int(p["track"]), s_, int(p["bar0"]), int(p.get("n") or 4), float(p.get("k") or 1), sm])
+    return dict(slot=slot, role=stem, bpm=float(state.get("bpm") or 0) or None, key=state.get("key") or None,
+                target=_kname(target), n=n, others=others)
+
+
+def _fill(rec, ctx, pool, probs, chosen, policy):
+    """rec <- context, the first SHOWN of pool (best first) each with its chance p, the rest as a count and a total,
+    the chosen one (an index into pool) with its features."""
+    probs = [float(v) for v in probs] if probs is not None else [None] * len(pool)
+    shown = [dict(c, p=pr) for c, pr in zip(pool[:SHOWN], probs[:SHOWN])]
+    rest = probs[SHOWN:]
+    ctx["rest"] = dict(n=len(rest), p=None if any(v is None for v in rest) else float(sum(rest)))
+    ch = pool[chosen] if chosen is not None else None
+    if ch is not None:
+        ctx["x"] = ch.get("x")
+        ctx["p"] = probs[chosen]
+    rec.update(context=ctx, shown=shown, chosen=ch["item"] if ch else None, policy=policy)
+
+
+def _oscon():
+    con = connect()
+    con.execute("PRAGMA busy_timeout = 3000")  # a deal waits at most this long for the log; then goes on without it
+    return con
+
+
+def deal(rec, surface, via=None, pre=False, extra=None):
+    """Write a deal's record as an impression -> its id (None if it couldn't be written). pre: a prefetched deal, not
+    heard yet: kept here until the browser plays it (dealt()) -> a token for that."""
+    if not rec:
+        return None
+    rec["context"].update(via=via, **(extra or {}))
+    if pre:
+        import secrets
+        tok = secrets.token_hex(6)
+        _STASH[tok] = (surface, rec, time.time())
+        while len(_STASH) > 64:
+            _STASH.pop(next(iter(_STASH)))
+        return tok
+    try:
+        plain = lambda v: v.item() if isinstance(v, np.generic) else v.tolist() if isinstance(v, np.ndarray) else str(v)
+        rec = json.loads(json.dumps(rec, default=plain))  # (numpy numbers as plain ones)
+        con = _oscon()
+        try:
+            return RL.impression(con, surface, rec["context"], rec["shown"], rec["chosen"], rec["policy"])
+        finally:
+            con.close()
+    except Exception as e:
+        _warn("impression", e)
+        return None
+
+
+def dealt(token, via=None):
+    """A prefetched deal was played: write its impression now -> its id (None if the server has forgotten it)."""
+    got = _STASH.pop(token, None)
+    if not got:
+        return None
+    surface, rec, made = got
+    return deal(rec, surface, via, extra=dict(prefetched=round(time.time() - made, 1)))
+
+
+def listed(list_imp, rank):
+    """A pick from a best-fits list: that list's impression gets its chosen item (the one at that rank)."""
+    try:
+        con = _oscon()
+        try:
+            r = con.execute("SELECT shown FROM reco_impressions WHERE id=?", (int(list_imp),)).fetchone()
+            if r:
+                RL.chose(con, int(list_imp), json.loads(r[0])[int(rank)]["item"])
+        finally:
+            con.close()
+    except Exception as e:
+        _warn("list pick", e)
+
+
+def _mix_tag(name):
+    return hashlib.sha1(str(name).encode()).hexdigest()[:12]  # the name itself stays out of the log
+
+
+def _out_item(o):
+    q = o.get("part") or {}
+    if q.get("sample"):
+        return _item(None, sample=q["sample"])
+    if q.get("track") is None or q.get("bar0") is None:
+        return None
+    return _item(q.get("stem") or o.get("role"), q["track"], q["bar0"], q.get("n") or 4)
+
+
+def saved_parts(name):
+    """The parts a mix of this name was already saved with: those in its stored state, and every part logged as saved
+    under it (so a part swapped out and back in between two saves isn't a new yes either)."""
+    seen = set()
+    try:
+        con = _mixes(_db())
+        r = con.execute("SELECT state FROM stem_mixes WHERE name=?", (name,)).fetchone()
+        if r:
+            seen |= {it for _, it, _ in RL.mix_parts(dict(slots=(json.loads(r["state"]) or {}).get("slots") or {}))}
+            for _, p in ((json.loads(r["state"]) or {}).get("slots") or {}).items():
+                if isinstance(p, dict) and p.get("sample"):
+                    seen.add(_item(None, sample=p["sample"]))
+        if RL._has(con, "reco_outcomes"):
+            for (it,) in con.execute("SELECT item FROM reco_outcomes WHERE action='saved' AND json_extract(context, "
+                                     "'$.mix')=?", (_mix_tag(name),)):
+                seen.add(tuple(json.loads(it)))
+    except Exception as e:
+        _warn("saved parts", e)
+    return seen
+
+
+def outcomes(outs, mix=None, seen=None):
+    """What became of dealt parts, from the browser: [dict(imp, slot, role, part, action, secs, value, by)].
+    mix: the name saved under (action saved: a part already saved under it is skipped, as is a second slot playing the
+    same part). -> how many were written."""
+    if not outs:
+        return 0
+    seen = set() if seen is None else set(seen)
+    try:
+        con = _oscon()
+        try:
+            n, now = 0, time.time()
+            for o in outs[:200]:
+                it = _out_item(o)
+                act = str(o.get("action") or "")[:20]
+                if it is None or not act:
+                    continue
+                ctx = {k: o[k] for k in ("slot", "role", "secs", "by") if o.get(k) is not None}
+                if (o.get("part") or {}).get("k") not in (None, 1):
+                    ctx["k"] = o["part"]["k"]
+                if mix is not None:
+                    if it in seen:
+                        continue
+                    seen.add(it)
+                    ctx["mix"] = _mix_tag(mix)
+                v = o.get("value")
+                RL.outcome(con, o.get("imp"), "mashup", it, act, None if v is None else float(v), ctx, now, commit=False)
+                n += 1
+            con.commit()
+            return n
+        finally:
+            con.close()
+    except Exception as e:
+        _warn("outcomes", e)
+        return 0
 
 
 # ---------------------------------------------------------------- one-shots
@@ -1063,9 +1371,10 @@ def cycle_harmony(state, n, lib=None):
     return H / (np.linalg.norm(H, axis=1, keepdims=True) + 1e-9)
 
 
-def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0):
+def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
     """A library sample for a one-shot slot with a cycle of n bars: drawn from the best by fit + taste (or `path`:
-    the one you chose). Comes with the bar it fits best (its first hit goes there) and its fit to every bar."""
+    the one you chose). Comes with the bar it fits best (its first hit goes there) and its fit to every bar.
+    rec: a dict to fill with what was on offer (deal())."""
     rng = rng or np.random.default_rng()
     con = _db()
     O = _oneshots(con)
@@ -1117,6 +1426,17 @@ def oneshot(state, n=1, avoid=(), rng=None, path=None, top=0):
         best40 = cand[np.argsort(-score[cand])[:40]]
         p = np.exp((score[best40] - score[best40].max()) / 0.35)
         k = int(rng.choice(best40, p=p / p.sum()))
+    if rec is not None and not top:
+        if path is not None:
+            _sample_rec(rec, "oneshot", state, slot, n, target, rows, [k], [1.0], 0, score, F.max(1), z, semis,
+                        dict(model="stems.oneshot", version=POLICY, score="4 fit + 0.35 taste", draw=None))
+        else:
+            rest = cand[np.argsort(-score[cand])[40:]]
+            _sample_rec(rec, "oneshot", state, slot, n, target, rows, list(best40) + list(rest),
+                        list(p / p.sum()) + [0.0] * len(rest), list(best40).index(k), score, F.max(1), z, semis,
+                        dict(model="stems.oneshot", version=POLICY, score="4 fit + 0.35 taste",
+                             draw=dict(over=len(best40), score_temp=0.35)),
+                        dict(avoid=len(avoid), excluded=int(len(rows) - len(cand))))
     def part(k):
         r = rows[k]
         return dict(stem="oneshot", sample=r["path"], sid=r["id"], artist=r["artist"] or "", title=r["title"] or "",
@@ -1153,7 +1473,7 @@ def _pads(con):
     return _PADS
 
 
-def pad(state, n=4, avoid=(), rng=None, path=None, top=0):
+def pad(state, n=4, avoid=(), rng=None, path=None, top=0, rec=None, slot=None):
     """A library pad for a pad track with a cycle of n bars: drawn from the best by how well its notes sit on the
     harmony of every bar of the cycle (it sounds through all of them), your taste, and whether it can be held
     seamlessly. Or `path`: the one you chose. It starts as one held hit at the top of the cycle."""
@@ -1204,7 +1524,32 @@ def pad(state, n=4, avoid=(), rng=None, path=None, top=0):
         best60 = cand[np.argsort(-score[cand])[:60]]
         p = np.exp(-np.arange(len(best60)) / 20.0)  # by rank: it moves through the best sixty
         k = int(rng.choice(best60, p=p / p.sum()))
+    if rec is not None:
+        pol = dict(model="stems.pad", version=POLICY, score="4 fit + 0.35 taste + 0.3 holds + 0.15 pad - 0.15 |semis|/6")
+        if path is not None:
+            _sample_rec(rec, "pad", state, slot, n, target, rows, [k], [1.0], 0, score, F.mean(1), z, semis,
+                        dict(pol, draw=None))
+        else:
+            order = cand[np.argsort(-score[cand])]  # (the same sort as best60: stable, so the same order)
+            _sample_rec(rec, "pad", state, slot, n, target, rows, list(order),
+                        list(p / p.sum()) + [0.0] * (len(order) - len(best60)), list(best60).index(k), score, F.mean(1),
+                        z, semis, dict(pol, draw=dict(over=len(best60), rank_temp=20.0)),
+                        dict(avoid=len(avoid), excluded=int(len(rows) - len(cand))))
     return _pad_part(rows, k, n, semis, F, z, holds)
+
+
+def _sample_rec(rec, role, state, slot, n, target, rows, pool, probs, chosen, score, fit, z, semis, policy, extra=None):
+    """rec <- a one-shot or pad deal: the samples in pool (best first) with their chances."""
+    try:
+        ctx = _deal_ctx(state, slot or role, role, n, target)
+        ctx.update(extra or {}, sample=rows[pool[chosen]]["path"] if policy.get("draw") is None else None)
+        P = [dict(item=("sample", rows[i]["path"]), score=round(float(score[i]), 5), semis=int(semis[i]),
+                  x=dict(fit=round(float(fit[i]), 4), taste=round(float(z[i]), 3))) if j < SHOWN or j == chosen else None
+             for j, i in enumerate(pool)]  # (only the shown ones and the chosen are built: the rest count, with their chance)
+        _fill(rec, ctx, P, probs, chosen, policy)
+    except Exception as e:
+        _warn(f"{role} record", e)
+        rec.clear()
 
 
 def _pad_part(rows, k, n, semis, F, z, holds):
@@ -1217,31 +1562,40 @@ def _pad_part(rows, k, n, semis, F, z, holds):
                 why=dict(fit=round(float(F[k].mean()), 3), taste=round(float(z[k]), 2), holds=bool(holds[k])))
 
 
-def top_fits(role, state, slot=None, n=None, top=12):
+def top_fits(role, state, slot=None, n=None, top=12, rec=None):
     """The parts that fit the harmony playing best, in order (not a draw): for a stem track, each song's best-fitting
     bars; for a one-shot or pad track, library samples. Drums and Tops have no harmony: theirs are ranked by the
-    overall score. -> [part with "fitp": 0..1]"""
+    overall score. -> [part with "fitp": 0..1]. rec: a dict to fill with the list as shown (a ranking: no chances)."""
     top = max(1, min(40, int(top or 12)))
     if role in ("oneshot", "pad"):
         cur = (state.get("slots") or {}).get(slot) or {}
         fn = pad if role == "pad" else oneshot
-        out = fn(state, int(n or cur.get("n") or (4 if role == "pad" else 1)), top=top) or []
+        nn = int(n or cur.get("n") or (4 if role == "pad" else 1))
+        out = fn(state, nn, top=top) or []
         for p in out:
             p["fitp"] = p["why"]["fit"]
+        if rec is not None:
+            try:
+                _fill(rec, _deal_ctx(state, slot or role, role, nn, target_key(state)),
+                      [dict(item=("sample", p["sample"]), score=p["fitp"], x=p["why"]) for p in out], None, None,
+                      dict(model="stems.top_fits", version=POLICY, sort="fit"))
+            except Exception as e:
+                _warn("best list record", e)
+                rec.clear()
         return out
     slot = slot or role
     lib, con = library(), _db()
-    w, _ = weights(con)
-    taste = _taste(con)
+    sco = scoring(con)
+    w = sco["w"]
     cur = (state.get("slots") or {}).get(slot) or {}
     n = int(n or cur.get("n") or 4)
     target = target_key(state, skip=slot)
     playing = {int(p["track"]) for sid, _, p in _parts(state, lib) if sid != slot}
-    cands = _candidates(role, state, lib, taste, target, w, n, playing, slot=slot)
+    cands = _candidates(role, state, lib, sco["taste"], target, w, n, playing, slot=slot, plus=sco["plus"])
     pitched = role in PITCHED and any(sid != slot and s_ in PITCHED for sid, s_, _ in _parts(state, lib))
     cands.sort(key=lambda c: -(c[4][3] if pitched else c[0]))
     seen, out = set(), []
-    for sc, tid, b, semis, x, k in cands:
+    for sc, tid, b, semis, x, k, _ in cands:
         if tid in seen:
             continue
         seen.add(tid)
@@ -1254,6 +1608,15 @@ def top_fits(role, state, slot=None, n=None, top=12):
         out.append(part)
         if len(out) >= top:
             break
+    if rec is not None:
+        try:
+            _fill(rec, _deal_ctx(state, slot, role, n, target, lib),
+                  [dict(item=_item(role, q["track"], q["bar0"], n), score=q["score"], k=q["k"], fitp=q["fitp"],
+                        x=[q["why"][f] for f in FEATURES]) for q in out], None, None,
+                  dict(sco["policy"], model="stems.top_fits", version=POLICY, sort="fit" if pitched else "score"))
+        except Exception as e:
+            _warn("best list record", e)
+            rec.clear()
     return out
 
 
@@ -1484,6 +1847,15 @@ def save_mix(name, state):
     con.execute("INSERT OR REPLACE INTO stem_mixes(name, state, updated_at) VALUES (?,?,datetime('now'))",
                 (name, json.dumps(state)))
     con.commit()
+
+
+def save(name, mix, state, outs=None):
+    """Save a combination, and log it as a yes: each part once per mix name (a re-save of the same parts, or of a part
+    swapped out and back in, adds nothing). outs: the browser's outcome records for its slots (action saved)."""
+    seen = saved_parts(name)
+    save_mix(name, mix)
+    log("save", state, skip=set(seen))
+    outcomes(outs or [], mix=name, seen=seen)
 
 
 def as_saved(state):
